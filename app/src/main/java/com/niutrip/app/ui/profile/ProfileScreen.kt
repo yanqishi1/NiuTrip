@@ -1,10 +1,7 @@
 package com.niutrip.app.ui.profile
 
-import android.Manifest
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -24,10 +21,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import coil.compose.AsyncImage
 import com.niutrip.app.BuildConfig
+import com.niutrip.app.ui.common.CameraImage
+import com.niutrip.app.ui.common.ImageSourceSheet
+import com.niutrip.app.ui.common.createCameraImage
+import com.niutrip.app.ui.common.hasCamera
+import com.niutrip.app.ui.create.AndroidPermissionChecker
+import com.niutrip.app.ui.create.requestBatteryWhitelist
 import com.niutrip.app.ui.theme.*
 
 private enum class ProfileDialog { RENAME, PASSWORD, BINDING, LOGOUT }
@@ -35,13 +41,29 @@ private enum class ProfileDialog { RENAME, PASSWORD, BINDING, LOGOUT }
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable fun ProfileScreen(viewModel: ProfileViewModel, onLogout: () -> Unit) {
     val state by viewModel.state.collectAsState(); val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val permissionChecker = remember(context) { AndroidPermissionChecker(context) }
+    var permissionRefresh by remember { mutableIntStateOf(0) }
+    val recordingPermissions = remember(permissionRefresh) { permissionChecker.status() }
     var dialog by remember { mutableStateOf<ProfileDialog?>(null) }
+    var showAvatarSource by remember { mutableStateOf(false) }
+    var pendingCameraImage by remember { mutableStateOf<CameraImage?>(null) }
     val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { it?.let(viewModel::updateAvatar) }
-    fun granted(permission: String): Boolean = androidx.core.content.ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { captured ->
+        pendingCameraImage?.let { image ->
+            if (captured) viewModel.updateAvatar(image.uri) else image.file.delete()
+        }
+        pendingCameraImage = null
+    }
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) permissionRefresh++ }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
     Scaffold(topBar = { TopAppBar(title = { Text("我的", fontWeight = FontWeight.Bold) }) }) { padding ->
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(8.dp)).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(64.dp).clip(CircleShape).background(Green50).clickable { avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }, contentAlignment = Alignment.Center) {
+                Box(Modifier.size(64.dp).clip(CircleShape).background(Green50).clickable { showAvatarSource = true }, contentAlignment = Alignment.Center) {
                     if (!state.user?.avata_url.isNullOrBlank()) AsyncImage(absoluteMedia(state.user!!.avata_url!!), null, Modifier.fillMaxSize()) else Icon(Icons.Outlined.Person, null, tint = Green700, modifier = Modifier.size(32.dp))
                 }
                 Spacer(Modifier.width(14.dp)); Column(Modifier.weight(1f)) { Text(state.user?.username ?: "旅行者", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium); Text(state.user?.user_id.orEmpty(), color = Muted, style = MaterialTheme.typography.bodySmall) }
@@ -52,10 +74,10 @@ private enum class ProfileDialog { RENAME, PASSWORD, BINDING, LOGOUT }
             }
             SectionLabel("应用权限")
             Column(Modifier.background(Color.White, RoundedCornerShape(8.dp))) {
-                PermissionRow("精确定位", granted(Manifest.permission.ACCESS_FINE_LOCATION), Icons.Outlined.LocationOn)
-                PermissionRow("后台定位", Build.VERSION.SDK_INT < 29 || granted(Manifest.permission.ACCESS_BACKGROUND_LOCATION), Icons.Outlined.Route)
-                PermissionRow("通知", Build.VERSION.SDK_INT < 33 || granted(Manifest.permission.POST_NOTIFICATIONS), Icons.Outlined.Notifications)
-                PermissionRow("相机", granted(Manifest.permission.CAMERA), Icons.Outlined.CameraAlt)
+                PermissionRow("精确定位", recordingPermissions.fineLocation, Icons.Outlined.LocationOn)
+                PermissionRow("后台定位", recordingPermissions.backgroundLocation, Icons.Outlined.Route)
+                PermissionRow("后台运行", recordingPermissions.batteryWhitelist, Icons.Outlined.BatterySaver) { requestBatteryWhitelist(context) }
+                PermissionRow("通知", recordingPermissions.notifications, Icons.Outlined.Notifications)
             }
             SectionLabel("账号与安全")
             Column(Modifier.background(Color.White, RoundedCornerShape(8.dp))) {
@@ -67,6 +89,18 @@ private enum class ProfileDialog { RENAME, PASSWORD, BINDING, LOGOUT }
         }
     }
     state.message?.let { AlertDialog(viewModel::clearMessage, text = { Text(it) }, confirmButton = { TextButton(viewModel::clearMessage) { Text("知道了") } }) }
+    if (showAvatarSource) ImageSourceSheet(
+        onDismiss = { showAvatarSource = false },
+        cameraAvailable = hasCamera(context),
+        onTakePhoto = {
+            showAvatarSource = false
+            createCameraImage(context).also { pendingCameraImage = it; camera.launch(it.uri) }
+        },
+        onChoosePhoto = {
+            showAvatarSource = false
+            avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        },
+    )
     when (dialog) {
         ProfileDialog.RENAME -> TextInputDialog("修改用户名", state.user?.username.orEmpty(), { dialog = null }) { viewModel.rename(it); dialog = null }
         ProfileDialog.PASSWORD -> PasswordDialog({ dialog = null }) { old, new -> viewModel.changePassword(old, new); dialog = null }
@@ -78,9 +112,9 @@ private enum class ProfileDialog { RENAME, PASSWORD, BINDING, LOGOUT }
 
 @Composable private fun SectionLabel(value: String) { Text(value, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelLarge) }
 @Composable private fun ProfileStat(value: Int, label: String) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Text(value.toString(), fontWeight = FontWeight.Bold); Text(label, color = Muted, style = MaterialTheme.typography.bodySmall) } }
-@Composable private fun PermissionRow(label: String, ok: Boolean, icon: androidx.compose.ui.graphics.vector.ImageVector) {
+@Composable private fun PermissionRow(label: String, ok: Boolean, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: (() -> Unit)? = null) {
     val context = LocalContext.current
-    Row(Modifier.fillMaxWidth().clickable { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().clickable { onClick?.invoke() ?: context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) }.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, tint = if (ok) Green700 else Warning); Spacer(Modifier.width(12.dp)); Text(label, Modifier.weight(1f)); Text(if (ok) "已允许" else "去设置", color = if (ok) Green700 else Warning, style = MaterialTheme.typography.bodySmall)
     }
 }

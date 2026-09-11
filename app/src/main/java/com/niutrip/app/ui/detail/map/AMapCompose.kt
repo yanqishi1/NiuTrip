@@ -14,6 +14,7 @@ import com.amap.api.maps.TextureMapView
 import com.amap.api.maps.model.*
 import com.niutrip.app.core.DayGroup
 import com.niutrip.app.core.PointLite
+import com.niutrip.app.core.RouteGeometry
 import com.niutrip.app.core.dayColor
 
 @Composable fun AMapView(
@@ -23,6 +24,7 @@ import com.niutrip.app.core.dayColor
     modifier: Modifier = Modifier,
     onPointClick: (PointLite) -> Unit = {},
     current: PointLite? = null,  // 无轨迹点时聚焦的当前位置
+    showEndpoints: Boolean = true,
 ) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -46,7 +48,7 @@ import com.niutrip.app.core.dayColor
         val pointLookup = mutableMapOf<String, PointLite>()
         visible.forEach { day ->
             val index = days.indexOf(day)
-            val points = day.points.map { LatLng(it.lat, it.lon) }
+            val points = RouteGeometry.suppressStationaryDrift(day.points).map { LatLng(it.lat, it.lon) }
             if (points.size >= 2) map.addPolyline(PolylineOptions().addAll(points).width(10f).color(dayColor(index).toInt()).geodesic(true))
             day.points.forEach { point ->
                 val position = LatLng(point.lat, point.lon); bounds.include(position)
@@ -57,10 +59,26 @@ import com.niutrip.app.core.dayColor
                 }
             }
         }
+        if (showEndpoints) RouteGeometry.endpoints(visible)?.let { endpoints ->
+            if (endpoints.start.id == endpoints.end.id) {
+                val point = endpoints.start
+                val marker = map.addMarker(MarkerOptions().position(LatLng(point.lat, point.lon)).title("起点 / 终点")
+                    .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_VIOLET)))
+                if (point.isCheckin) pointLookup[marker.id] = point
+            } else {
+                listOf(
+                    Triple(endpoints.start, "起点", BitmapDescriptorFactory.HUE_GREEN),
+                    Triple(endpoints.end, "终点", BitmapDescriptorFactory.HUE_RED),
+                ).forEach { (point, title, hue) ->
+                    val marker = map.addMarker(MarkerOptions().position(LatLng(point.lat, point.lon)).title(title)
+                        .icon(BitmapDescriptorFactory.defaultMarker(hue)))
+                    if (point.isCheckin) pointLookup[marker.id] = point
+                }
+            }
+        }
         latest?.takeIf { visible.any { day -> day.points.any { point -> point.id == it.id } } }?.let {
             val position = LatLng(it.lat, it.lon)
             map.addCircle(CircleOptions().center(position).radius(35.0).fillColor(0x3300B96B).strokeColor(0xFF00B96B.toInt()).strokeWidth(3f))
-            map.addMarker(MarkerOptions().position(position).title("最新位置").icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN)))
         }
         map.setOnMarkerClickListener { marker -> pointLookup[marker.id]?.let(onPointClick); marker.showInfoWindow(); true }
         val all = visible.flatMap { it.points }

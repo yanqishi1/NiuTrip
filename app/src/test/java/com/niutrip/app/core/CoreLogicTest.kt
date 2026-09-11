@@ -25,4 +25,22 @@ class CoreLogicTest {
         assertEquals(DAY_COLORS[0], dayColor(DAY_COLORS.size))
         assertEquals(DAY_COLORS.last(), dayColor(-1))
     }
+
+    @Test fun `route endpoints follow chronological order`() {
+        val days = DayGrouper.group(listOf(point("end", "2026-09-06T12:00:00"), point("start", "2026-09-05T08:00:00")))
+        val endpoints = RouteGeometry.endpoints(days)
+        assertEquals("start", endpoints?.start?.id)
+        assertEquals("end", endpoints?.end?.id)
+    }
+
+    @Test fun `stationary drift is removed while route movement remains`() {
+        val base = LocalDateTime.parse("2026-09-05T08:00:00")
+        val points = listOf(
+            PointLite("a", base, 116.0, 39.0, false),
+            PointLite("jitter", base.plusMinutes(10), 116.00005, 39.00005, false),
+            PointLite("moved", base.plusMinutes(20), 116.001, 39.001, false),
+            PointLite("end", base.plusMinutes(30), 116.00105, 39.00105, false),
+        )
+        assertEquals(listOf("a", "moved", "end"), RouteGeometry.suppressStationaryDrift(points).map { it.id })
+    }
 }

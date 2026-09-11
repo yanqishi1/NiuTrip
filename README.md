@@ -8,7 +8,7 @@
 - Android SDK 34
 - Android Studio Hedgehog 或更高版本
 - 高德组合 SDK 11.2.100（含地图、定位与搜索，支持 16KB page size）
-- 后端默认运行在 `http://10.0.2.2:8000/`（Android 模拟器访问宿主机）
+- 默认连接部署在 `https://niutrip.gyberpunk123.asia/` 的后端
 
 在 `android/gradle.properties` 或用户级 `~/.gradle/gradle.properties` 中配置高德 Key：
 
@@ -16,7 +16,7 @@
 AMAP_KEY=your_android_amap_key
 ```
 
-API 地址与分享链接域名（默认分别为 `http://10.0.2.2:8000/api/` 模拟器别名、`http://127.0.0.1:8000` 本机）。真机调试或让局域网内他人访问时，改为后端所在机器的局域网 IP（模拟器也能访问宿主机局域网 IP，覆盖后两者通用）：
+API 地址与分享链接域名默认使用线上服务。本地联调时，可以改为后端所在机器的局域网 IP（模拟器也能访问宿主机局域网 IP，覆盖后两者通用）：
 
 ```properties
 API_BASE_URL=http://192.168.1.100:8000/api/
@@ -54,13 +54,13 @@ SHARE_BASE_URL=http://192.168.1.100:8000
 同名 GitHub Release：
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.2.0
+git push origin v0.2.0
 ```
 
 仓库可在 GitHub 的 Actions Variables 中配置 `API_BASE_URL` 和 `SHARE_BASE_URL`，
-在 Actions Secrets 中配置 `AMAP_KEY`。未配置时，APK 默认连接
-`http://127.0.0.1:8000`，适合配合 `scripts/usb-reverse.sh` 跑通测试流程。
+在 Actions Secrets 中配置 `AMAP_KEY`。未配置地址变量时，APK 默认连接
+`https://niutrip.gyberpunk123.asia`；需要 USB 联调时可在本地通过 Gradle 属性覆盖。
 
 当前流程使用 Android 调试签名，以便无需分发密钥也能自动生成可安装 APK。正式发布前应改为
 独立且妥善备份的 Release 签名，并在 GitHub Secrets 中保存加密后的签名材料；同一应用后续
@@ -71,7 +71,8 @@ git push origin v0.1.0
 - 手机号/邮箱登录与注册
 - 我的轨迹/分享给我的双列表
 - 自动或仅手动轨迹、前台定位服务、离线队列补传
-- 高德地图按天分色、日期切换、手动图文打卡
+- 高德地图按天分色、起终点标记、静止漂移过滤与日期切换
+- 手动图文打卡支持拍照或相册选择，超过 1 MB 的图片自动压缩
 - 私密/一次性/公开分享与 Deep Link 保存
 - 资料、安全与权限管理
 

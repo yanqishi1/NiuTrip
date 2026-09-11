@@ -14,6 +14,7 @@ import com.niutrip.app.data.repo.SyncRepository
 import com.niutrip.app.data.repo.TrackRepository
 import com.niutrip.app.service.AMapLocationSource
 import com.niutrip.app.service.LocationSource
+import com.niutrip.app.service.TrackRecordingService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -34,6 +35,8 @@ class NiuTripApp : Application() {
         AMapLocationClient.updatePrivacyShow(this, true, true)
         AMapLocationClient.updatePrivacyAgree(this, true)
         container = AppContainer(this)
+        // 系统回收进程后，SharedPreferences 中仍保留正在自动记录的轨迹；进程重建时恢复前台服务。
+        runCatching { TrackRecordingService.resumeIfActive(this) }
         // 离线补传触发：App 启动 + 网络恢复（记录中的采集点另有 afterCollect 触发）。
         // 网络回调是非关键增强，注册失败不应炸掉启动路径
         container.applicationScope.launch { container.syncRepository.flushOnce() }

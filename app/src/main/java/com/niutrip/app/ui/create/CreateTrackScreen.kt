@@ -1,10 +1,7 @@
 package com.niutrip.app.ui.create
 
 import android.Manifest
-import android.content.Intent
-import android.net.Uri
 import android.os.Build
-import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
@@ -29,6 +26,7 @@ import com.niutrip.app.ui.theme.*
     val state by viewModel.state.collectAsState(); val context = LocalContext.current
     val fine = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { viewModel.permissionsChanged() }
     val background = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { viewModel.permissionsChanged() }
+    val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { viewModel.permissionsChanged() }
     LaunchedEffect(state.result) { (state.result as? CreateResult.Done)?.let { onDone(it.track.track_id) } }
     Scaffold(topBar = { TopAppBar(title = { Text("创建轨迹") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } }) }) { padding ->
         Column(Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -42,9 +40,13 @@ import com.niutrip.app.ui.theme.*
                     Text("自动记录需要定位与后台运行权限", fontWeight = FontWeight.SemiBold)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(onClick = { fine.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) }) { Text("精确定位") }
-                        if (Build.VERSION.SDK_INT >= 29) OutlinedButton(onClick = { background.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION) }) { Text("后台定位") }
+                        if (Build.VERSION.SDK_INT >= 29) OutlinedButton(onClick = {
+                            if (Build.VERSION.SDK_INT == 29) background.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                            else openAppPermissionSettings(context)
+                        }) { Text(if (Build.VERSION.SDK_INT >= 30) "设置始终允许定位" else "后台定位") }
                     }
-                    TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}"))) }) { Text("允许后台运行") }
+                    if (Build.VERSION.SDK_INT >= 33) TextButton(onClick = { notifications.launch(Manifest.permission.POST_NOTIFICATIONS) }) { Text("允许记录通知") }
+                    TextButton(onClick = { requestBatteryWhitelist(context) }) { Text("允许后台运行") }
                     TextButton(onClick = viewModel::degradeToManual) { Text("改为仅手动") }
                 }
             }

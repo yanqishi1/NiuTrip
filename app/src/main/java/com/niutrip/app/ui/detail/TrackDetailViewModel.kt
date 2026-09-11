@@ -92,11 +92,11 @@ class TrackDetailViewModel(
         }
         _state.update { it.copy(updatingImage = true, error = null) }
         runCatching {
-            val file = withContext(Dispatchers.IO) { compressor.compressToUnder1Mb(uri) }
+            val image = withContext(Dispatchers.IO) { compressor.prepareForUpload(uri) }
             try {
-                repository.updateImage(id, file)
+                repository.updateImage(id, image.file, image.mediaType)
             } finally {
-                withContext(Dispatchers.IO) { file.delete() }
+                withContext(Dispatchers.IO) { image.file.delete() }
             }
         }.onSuccess { track ->
             _state.update { it.copy(track = track, updatingImage = false) }

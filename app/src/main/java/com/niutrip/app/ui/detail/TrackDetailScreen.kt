@@ -1,5 +1,7 @@
 package com.niutrip.app.ui.detail
 
+import android.Manifest
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -18,14 +20,26 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.niutrip.app.core.asTrackStatus
 import com.niutrip.app.core.dayColor
 import com.niutrip.app.core.TrackStateMachine
 import com.niutrip.app.ui.common.LoadingOrError
+import com.niutrip.app.ui.common.CameraImage
+import com.niutrip.app.ui.common.ImageSourceSheet
+import com.niutrip.app.ui.common.RecordingPermissionDialog
 import com.niutrip.app.ui.common.StatusPill
 import com.niutrip.app.ui.common.TrackCover
+import com.niutrip.app.ui.common.createCameraImage
+import com.niutrip.app.ui.common.hasCamera
+import com.niutrip.app.ui.create.AndroidPermissionChecker
+import com.niutrip.app.ui.create.openAppPermissionSettings
+import com.niutrip.app.ui.create.requestBatteryWhitelist
 import com.niutrip.app.ui.detail.map.AMapView
 import com.niutrip.app.ui.theme.*
 
@@ -40,8 +54,30 @@ import com.niutrip.app.ui.theme.*
     onStopService: () -> Unit,
 ) {
     val state by viewModel.state.collectAsState()
+    val context = LocalContext.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val permissionChecker = remember(context) { AndroidPermissionChecker(context) }
+    var permissionRefresh by remember { mutableIntStateOf(0) }
+    var showRecordingPermissions by remember { mutableStateOf(false) }
+    val recordingPermissions = remember(permissionRefresh) { permissionChecker.status() }
+    var showImageSource by remember { mutableStateOf(false) }
+    var pendingCameraImage by remember { mutableStateOf<CameraImage?>(null) }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) {
         it?.let(viewModel::updateImage)
+    }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { captured ->
+        pendingCameraImage?.let { image ->
+            if (captured) viewModel.updateImage(image.uri) else image.file.delete()
+        }
+        pendingCameraImage = null
+    }
+    val fineLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissionRefresh++ }
+    val backgroundLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permissionRefresh++ }
+    val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permissionRefresh++ }
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) permissionRefresh++ }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
     }
     // 进入/返回本页都刷新：打卡发布完 popBackStack 回来立即可见新点位与计数
     LaunchedEffect(Unit) { viewModel.load() }
@@ -64,7 +100,7 @@ import com.niutrip.app.ui.theme.*
                         text = { Text("更换代表图") },
                         onClick = {
                             menu = false
-                            imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            showImageSource = true
                         },
                         leadingIcon = { Icon(Icons.Default.Edit, null) },
                         enabled = !state.updatingImage,
@@ -92,7 +128,14 @@ import com.niutrip.app.ui.theme.*
                 if (!readOnly && track != null) {
                     Spacer(Modifier.height(14.dp)); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         when {
-                            TrackStateMachine.canStart(track.track_status.asTrackStatus()) -> Button({ viewModel.changeStatus("RECORDING") { onStartService(it.track_id, it.track_name, it.track_record_mode) } }, Modifier.weight(1f)) { Text("开始记录") }
+                            TrackStateMachine.canStart(track.track_status.asTrackStatus()) -> Button({
+                                if (permissionChecker.status().canRecordInBackground || track.track_record_mode != "AUTO") {
+                                    viewModel.changeStatus("RECORDING") { onStartService(it.track_id, it.track_name, it.track_record_mode) }
+                                } else {
+                                    permissionRefresh++
+                                    showRecordingPermissions = true
+                                }
+                            }, Modifier.weight(1f)) { Text("开始记录") }
                             TrackStateMachine.canFinish(track.track_status.asTrackStatus()) -> OutlinedButton({ viewModel.changeStatus("FINISHED") { onStopService() } }, Modifier.weight(1f), colors = ButtonDefaults.outlinedButtonColors(contentColor = Danger)) { Text("结束记录") }
                         }
                         if (TrackStateMachine.canCheckin(track.track_status.asTrackStatus())) OutlinedButton({ onCheckin(track.track_id) }, Modifier.weight(1f)) { Text("手动打卡") }
@@ -106,7 +149,11 @@ import com.niutrip.app.ui.theme.*
         var value by remember(state.track?.track_name) { mutableStateOf(state.track?.track_name.orEmpty()) }
         AlertDialog({ rename = false }, title = { Text("修改轨迹名称") }, text = { OutlinedTextField(value, { value = it }, singleLine = true) }, confirmButton = { TextButton({ viewModel.rename(value); rename = false }) { Text("保存") } }, dismissButton = { TextButton({ rename = false }) { Text("取消") } })
     }
-    if (delete) AlertDialog({ delete = false }, title = { Text("删除轨迹？") }, text = { Text("轨迹会从列表移除，此操作不可撤销。") }, confirmButton = { TextButton({ delete = false; viewModel.delete() }) { Text("删除", color = Danger) } }, dismissButton = { TextButton({ delete = false }) { Text("取消") } })
+    if (delete) AlertDialog({ delete = false }, title = { Text("删除轨迹？") }, text = { Text("轨迹会从列表移除，此操作不可撤销。") }, confirmButton = { TextButton({
+        delete = false
+        if (backgroundRecording) onStopService()
+        viewModel.delete()
+    }) { Text("删除", color = Danger) } }, dismissButton = { TextButton({ delete = false }) { Text("取消") } })
     if (exitPrompt) AlertDialog(
         onDismissRequest = { exitPrompt = false },
         title = { Text("退出轨迹？") },
@@ -118,6 +165,40 @@ import com.niutrip.app.ui.theme.*
     if (state.error != null && state.track != null) AlertDialog({ viewModel.dismissError() },
         title = { Text("操作失败") }, text = { Text(state.error.orEmpty()) },
         confirmButton = { TextButton({ viewModel.dismissError() }) { Text("知道了") } })
+    if (showImageSource) ImageSourceSheet(
+        onDismiss = { showImageSource = false },
+        cameraAvailable = hasCamera(context),
+        onTakePhoto = {
+            showImageSource = false
+            createCameraImage(context).also { pendingCameraImage = it; camera.launch(it.uri) }
+        },
+        onChoosePhoto = {
+            showImageSource = false
+            imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        },
+    )
+    if (showRecordingPermissions) RecordingPermissionDialog(
+        status = recordingPermissions,
+        onFineLocation = { fineLocation.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) },
+        onBackgroundLocation = {
+            if (!recordingPermissions.fineLocation) fineLocation.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+            else if (Build.VERSION.SDK_INT == 29) backgroundLocation.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            else openAppPermissionSettings(context)
+        },
+        onBatteryWhitelist = { requestBatteryWhitelist(context) },
+        onNotifications = {
+            if (Build.VERSION.SDK_INT >= 33) notifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+            else permissionRefresh++
+        },
+        onDismiss = { showRecordingPermissions = false },
+        onReady = {
+            val track = state.track
+            if (track != null && permissionChecker.status().canRecordInBackground) {
+                showRecordingPermissions = false
+                viewModel.changeStatus("RECORDING") { onStartService(it.track_id, it.track_name, it.track_record_mode) }
+            } else permissionRefresh++
+        },
+    )
 }
 
 @Composable private fun DayChip(label: String, selected: Boolean, color: Color, onClick: () -> Unit) {

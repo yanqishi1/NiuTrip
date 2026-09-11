@@ -7,7 +7,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
 sealed interface LocResult {
-    data class Success(val lon: Double, val lat: Double, val timeMillis: Long) : LocResult
+    data class Success(val lon: Double, val lat: Double, val timeMillis: Long, val accuracyMeters: Float = Float.NaN) : LocResult
     data class Failure(val reason: String) : LocResult
 }
 
@@ -27,7 +27,7 @@ class AMapLocationSource(context: Context) : LocationSource {
         client.setLocationListener { location ->
             if (!continuation.isActive) return@setLocationListener
             val result = if (location != null && location.errorCode == 0) {
-                LocResult.Success(location.longitude, location.latitude, location.time)
+                LocResult.Success(location.longitude, location.latitude, location.time, location.accuracy)
             } else LocResult.Failure(location?.errorInfo ?: "定位失败")
             continuation.resume(result)
             client.stopLocation(); client.onDestroy()

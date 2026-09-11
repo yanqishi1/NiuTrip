@@ -56,9 +56,14 @@ class CheckinViewModel(
         _state.update { it.copy(result = CheckinResult.Loading) }
         try {
             val urls = current.photos.map { uri ->
-                val file = withContext(Dispatchers.IO) { compressor.compressToUnder1Mb(uri) }
-                val part = MultipartBody.Part.createFormData("image", file.name, file.asRequestBody("image/jpeg".toMediaType()))
-                apiCall { api.upload(part) }.url
+                val image = withContext(Dispatchers.IO) { compressor.prepareForUpload(uri) }
+                try {
+                    val part = MultipartBody.Part.createFormData("image", image.file.name,
+                        image.file.asRequestBody(image.mediaType.toMediaType()))
+                    apiCall { api.upload(part) }.url
+                } finally {
+                    withContext(Dispatchers.IO) { image.file.delete() }
+                }
             }
             val now = System.currentTimeMillis()
             apiCall { api.postPoints(trackId, PointsIn(listOf(PointIn(businessId(), lon, lat,

@@ -40,10 +40,15 @@ class ProfileViewModel(private val api: ApiService, private val tokens: TokenSto
         _state.update { it.copy(user = apiCall { api.updateProfile(ProfileUpdateIn(username = value.trim())) }) }
     }
     fun updateAvatar(uri: Uri) = launchAction {
-        val file = withContext(Dispatchers.IO) { compressor.compressToUnder1Mb(uri) }
-        val part = MultipartBody.Part.createFormData("image", file.name, file.asRequestBody("image/jpeg".toMediaType()))
-        val url = apiCall { api.upload(part) }.url
-        _state.update { it.copy(user = apiCall { api.updateProfile(ProfileUpdateIn(avata_url = url)) }) }
+        val image = withContext(Dispatchers.IO) { compressor.prepareForUpload(uri) }
+        try {
+            val part = MultipartBody.Part.createFormData("image", image.file.name,
+                image.file.asRequestBody(image.mediaType.toMediaType()))
+            val url = apiCall { api.upload(part) }.url
+            _state.update { it.copy(user = apiCall { api.updateProfile(ProfileUpdateIn(avata_url = url)) }) }
+        } finally {
+            withContext(Dispatchers.IO) { image.file.delete() }
+        }
     }
     fun changePassword(old: String, new: String) = launchAction {
         require(new.length >= 8) { "新密码至少 8 位" }; apiCall { api.changePassword(PasswordIn(old, new)) }; _state.update { it.copy(message = "密码已更新") }

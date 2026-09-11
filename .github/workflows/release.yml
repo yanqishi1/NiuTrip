@@ -27,8 +27,8 @@ jobs:
       - name: Test and build installable APK
         env:
           ORG_GRADLE_PROJECT_AMAP_KEY: ${{ secrets.AMAP_KEY }}
-          ORG_GRADLE_PROJECT_API_BASE_URL: ${{ vars.API_BASE_URL || 'http://127.0.0.1:8000/api/' }}
-          ORG_GRADLE_PROJECT_SHARE_BASE_URL: ${{ vars.SHARE_BASE_URL || 'http://127.0.0.1:8000' }}
+          ORG_GRADLE_PROJECT_API_BASE_URL: ${{ vars.API_BASE_URL || 'https://niutrip.gyberpunk123.asia/api/' }}
+          ORG_GRADLE_PROJECT_SHARE_BASE_URL: ${{ vars.SHARE_BASE_URL || 'https://niutrip.gyberpunk123.asia' }}
         run: |
           chmod +x gradlew
           ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
