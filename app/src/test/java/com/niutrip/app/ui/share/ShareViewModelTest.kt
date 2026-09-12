@@ -25,6 +25,18 @@ class ShareViewModelTest {
         assertEquals(BuildConfig.SHARE_BASE_URL + "/t/tok123", (vm.state.value.result as ShareResult.Done).url)
     }
 
+    @Test fun `share text keeps url unchanged on its own line with usage hint`() {
+        val url = "https://niutrip.gyberpunk123.asia/t/tok123/"
+        assertEquals(
+            listOf(
+                "【NiuTrip 旅行轨迹分享】",
+                url,
+                "复制这条消息，打开 NiuTrip App 即可查看并保存这条轨迹",
+            ),
+            buildShareText(url).lines(),
+        )
+    }
+
     private class FakeApi(private val out: ShareOut) : StubApi() {
         override suspend fun share(id: String, body: ShareIn) = out
     }

@@ -14,6 +14,11 @@ import kotlinx.coroutines.launch
 sealed interface ShareResult { data object Idle : ShareResult; data object Loading : ShareResult; data class Done(val mode: String, val url: String?) : ShareResult; data class Error(val message: String) : ShareResult }
 data class ShareState(val selectedMode: String = "PRIVATE", val result: ShareResult = ShareResult.Idle)
 
+/** 分享文案（百度网盘式）：URL 原样独占一行（接收端 DeepLinkHandler 按空白截断提取、
+ *  忽略其余说明文字），后附使用方式说明，引导接收方回到 App 打开。 */
+fun buildShareText(url: String): String =
+    "【NiuTrip 旅行轨迹分享】\n$url\n复制这条消息，打开 NiuTrip App 即可查看并保存这条轨迹"
+
 class ShareViewModel(private val trackId: String, private val api: ApiService) : ViewModel() {
     private val _state = MutableStateFlow(ShareState()); val state = _state.asStateFlow()
     fun pick(mode: String) = _state.update { it.copy(selectedMode = mode, result = ShareResult.Idle) }

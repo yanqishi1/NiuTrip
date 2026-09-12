@@ -24,4 +24,13 @@ class DeepLinkHandlerTest {
         assertNull(DeepLinkHandler.parseSharedText("https://example.com/other/abc123"))
         assertNull(DeepLinkHandler.parseSharedText("javascript://niutrip.cn/t/abc123"))
     }
+
+    @Test fun `parses share text that carries usage instructions`() {
+        val url = "https://niutrip.gyberpunk123.asia/t/abc_123-Z/"
+        assertEquals("abc_123-Z", DeepLinkHandler.parseSharedText(com.niutrip.app.ui.share.buildShareText(url)))
+    }
+
+    @Test fun `parses when other apps strip newlines and chinese hugs the url`() {
+        assertEquals("abc123", DeepLinkHandler.parseSharedText("https://niutrip.cn/t/abc123复制这条消息，打开App即可查看"))
+    }
 }

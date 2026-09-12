@@ -8,7 +8,9 @@ object DeepLinkHandler {
         return parseTrackUri(data)
     }
 
-    /** Clipboard links may use a development or self-hosted domain. */
+    /** Clipboard links may use a development or self-hosted domain.
+     *  分享文案里的使用说明（buildShareText）被自然忽略：URL 提取按空白截断，
+     *  他端抹掉换行导致说明文字粘进路径时，只取路径段开头的合法 token 序列。 */
     fun parseSharedText(text: CharSequence?): String? = WEB_URL.findAll(text?.toString().orEmpty())
         .mapNotNull { match ->
             val candidate = match.value.trimEnd('.', ',', ';', ')', ']', '}', '。', '，')
@@ -21,7 +23,7 @@ object DeepLinkHandler {
         val parts = uri.pathSegments
         return parts.takeIf { it.size == 2 && it[0] == "t" }
             ?.get(1)
-            ?.takeIf { it.matches(TOKEN) }
+            ?.let { segment -> if (segment.matches(TOKEN)) segment else TOKEN.find(segment)?.value }
     }
 
     private val WEB_URL = Regex("https?://[^\\s<>\\\"']+", RegexOption.IGNORE_CASE)
