@@ -50,13 +50,30 @@ SHARE_BASE_URL=http://192.168.1.100:8000
 
 ## GitHub Release
 
-推送 `v*` 标签后，GitHub Actions 会运行单元测试、构建可安装的测试 APK，并自动创建
-同名 GitHub Release：
+发布前先提交所有功能改动并切换到 `main` 分支，然后运行发布脚本。未指定版本时，脚本会将
+最新 Git 标签的补丁版本加一，例如从 `v0.2.0` 推算为 `v0.2.1`：
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+./scripts/release.sh
 ```
+
+也可以手动指定版本号；`v` 前缀可省略：
+
+```bash
+./scripts/release.sh 0.3.0
+./scripts/release.sh v1.0.0
+```
+
+只查看脚本推算的版本，不修改文件或推送：
+
+```bash
+./scripts/release.sh --dry-run
+./scripts/release.sh --dry-run 0.3.0
+```
+
+脚本会更新 `versionCode` 和 `versionName`，运行单元测试并构建本地 APK，创建版本提交与
+Git 标签，然后将 `main` 和标签原子推送到 GitHub。标签会触发 GitHub Actions 构建可安装
+的 APK、生成 SHA-256 文件并创建同名 Release；脚本会等待并输出最终下载地址。
 
 仓库可在 GitHub 的 Actions Variables 中配置 `API_BASE_URL` 和 `SHARE_BASE_URL`，
 在 Actions Secrets 中配置 `AMAP_KEY`。未配置地址变量时，APK 默认连接
