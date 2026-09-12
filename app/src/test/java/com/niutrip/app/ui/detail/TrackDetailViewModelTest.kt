@@ -1,5 +1,6 @@
 package com.niutrip.app.ui.detail
 
+import android.app.Application
 import com.niutrip.app.data.local.FakePendingPointDao
 import com.niutrip.app.data.local.PendingPointEntity
 import com.niutrip.app.data.local.TrackDao
@@ -17,6 +18,11 @@ import com.niutrip.app.data.repo.SyncRepository
 import com.niutrip.app.data.repo.TrackRepository
 import com.niutrip.app.service.LocResult
 import com.niutrip.app.service.LocationSource
+import com.niutrip.app.ui.checkin.ImagePreparer
+import com.niutrip.app.ui.checkin.PreparedImage
+import android.net.Uri
+import okhttp3.MultipartBody
+import java.io.File
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -31,8 +37,13 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
+@Config(application = Application::class)
 class TrackDetailViewModelTest {
     @Before fun setUp() = Dispatchers.setMain(UnconfinedTestDispatcher())
     @After fun tearDown() = Dispatchers.resetMain()
@@ -47,7 +58,8 @@ class TrackDetailViewModelTest {
             override suspend fun track(id: String) = trackDto()
             override suspend fun points(id: String, page: Int) = PointsPage(points.size, null, null, points)
         }
-        return TrackDetailViewModel("t1", TrackRepository(resolved, FakeDao), source, SyncRepository(resolved, FakePendingPointDao()))
+        return TrackDetailViewModel("t1", TrackRepository(resolved, FakeDao), source,
+            SyncRepository(resolved, FakePendingPointDao()), ImagePreparer { error("unused") })
     }
 
     @Test fun `empty track locates current position for map focus`() = runTest {
@@ -63,10 +75,11 @@ class TrackDetailViewModelTest {
         assertNull(vm.state.value.current)
     }
 
-    @Test fun `track with points skips current location lookup`() = runTest {
+    @Test fun `recording track with points uses latest point as current fallback`() = runTest {
         val vm = vm(points = listOf(pointDto("p1")), source = { LocResult.Success(99.9, 9.9, 1) })
         vm.load()
-        assertNull(vm.state.value.current)
+        assertEquals(100.0, vm.state.value.current?.lon ?: 0.0, 1e-9)
+        assertEquals(30.0, vm.state.value.current?.lat ?: 0.0, 1e-9)
     }
 
     @Test fun `location button focuses current position even when track has points`() = runTest {
@@ -134,12 +147,37 @@ class TrackDetailViewModelTest {
         val sync = SyncRepository(api, FakePendingPointDao(listOf(
             PendingPointEntity(trackId = "t1", pointId = "p2", lon = 100.0, lat = 30.0,
                 time = 1_700_000_001_000, source = "AUTO", createdAt = 0))))
-        val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao), LocationSource { LocResult.Failure("x") }, sync)
+        val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao), LocationSource { LocResult.Failure("x") },
+            sync, ImagePreparer { error("unused") })
         vm.load()
         assertEquals(1, vm.state.value.points.size)
         points += pointDto("p3")                     // 服务器即将多一个点
         sync.flushOnce()                             // 队列把 t1 的点传上去 → 发事件
         assertEquals(2, vm.state.value.points.size)  // 详情页原地刷新，无需退出重进
+    }
+
+    @Test fun `locally recorded point moves current marker before upload`() = runTest {
+        val api = object : StubApi() {}
+        val sync = SyncRepository(api, FakePendingPointDao())
+        val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao),
+            LocationSource { LocResult.Failure("unused") }, sync, ImagePreparer { error("unused") })
+
+        sync.notifyPointRecorded("t1", 116.397, 39.908, 1_700_000_001_000)
+
+        assertEquals(116.397, vm.state.value.current?.lon ?: 0.0, 1e-9)
+        assertEquals(39.908, vm.state.value.current?.lat ?: 0.0, 1e-9)
+        assertEquals(0, vm.state.value.currentFocusRequest)
+    }
+
+    @Test fun `locally recorded point from another track is ignored`() = runTest {
+        val api = object : StubApi() {}
+        val sync = SyncRepository(api, FakePendingPointDao())
+        val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao),
+            LocationSource { LocResult.Failure("unused") }, sync, ImagePreparer { error("unused") })
+
+        sync.notifyPointRecorded("t2", 116.397, 39.908, 1_700_000_001_000)
+
+        assertNull(vm.state.value.current)
     }
 
     @Test fun `start conflict surfaces error and dismiss clears it`() = runTest {
@@ -153,6 +191,47 @@ class TrackDetailViewModelTest {
         assertEquals("已有正在记录的轨迹", vm.state.value.error)  // 用户能看见失败原因
         vm.dismissError()
         assertNull(vm.state.value.error)
+    }
+
+    @Test fun `cover image is uploaded through track cover endpoint`() = runTest {
+        var updatedTrackId: String? = null
+        val api = object : StubApi() {
+            override suspend fun updateTrackCover(id: String, image: MultipartBody.Part): TrackDto {
+                updatedTrackId = id
+                return trackDto().copy(track_img_url = "/media/uploads/new-cover.jpg")
+            }
+        }
+        val imageFile = File.createTempFile("track-cover-test", ".jpg").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        val viewModel = TrackDetailViewModel(
+            "t1",
+            TrackRepository(api, FakeDao),
+            LocationSource { LocResult.Failure("unused") },
+            SyncRepository(api, FakePendingPointDao()),
+            ImagePreparer { PreparedImage(imageFile, "image/jpeg", false) },
+        )
+
+        viewModel.updateImage(Uri.EMPTY).join()
+
+        assertEquals("t1", updatedTrackId)
+        assertEquals("/media/uploads/new-cover.jpg", viewModel.state.value.track?.track_img_url)
+        assertFalse(viewModel.state.value.updatingImage)
+        assertFalse(imageFile.exists())
+    }
+
+    @Test fun `rename trims and updates track name`() = runTest {
+        var submittedName: String? = null
+        val api = object : StubApi() {
+            override suspend fun patchTrack(id: String, body: TrackPatchIn): TrackDto {
+                submittedName = body.track_name
+                return trackDto().copy(track_name = body.track_name.orEmpty())
+            }
+        }
+        val viewModel = vm(emptyList(), LocationSource { LocResult.Failure("unused") }, api)
+
+        viewModel.rename("  新轨迹名称  ")
+
+        assertEquals("新轨迹名称", submittedName)
+        assertEquals("新轨迹名称", viewModel.state.value.track?.track_name)
     }
 
     private object FakeDao : TrackDao {

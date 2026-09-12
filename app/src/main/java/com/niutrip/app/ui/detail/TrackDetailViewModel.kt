@@ -12,7 +12,7 @@ import com.niutrip.app.data.repo.SyncRepository
 import com.niutrip.app.data.repo.TrackRepository
 import com.niutrip.app.service.LocResult
 import com.niutrip.app.service.LocationSource
-import com.niutrip.app.ui.checkin.ImageCompressor
+import com.niutrip.app.ui.checkin.ImagePreparer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -40,7 +40,7 @@ class TrackDetailViewModel(
     private val repository: TrackRepository,
     private val locationSource: LocationSource,
     syncRepository: SyncRepository,
-    private val imageCompressor: ImageCompressor? = null,
+    private val imagePreparer: ImagePreparer,
 ) : ViewModel() {
     private val _state = MutableStateFlow(DetailState()); val state = _state.asStateFlow()
 
@@ -48,6 +48,12 @@ class TrackDetailViewModel(
         // 本轨迹的点刚被上传（开始记录首点/自动采集/离线补传）→ 原地刷新，用户无需退出重进
         viewModelScope.launch {
             syncRepository.uploads.collect { (trackId, _) -> if (trackId == id) load() }
+        }
+        // 本地写入成功即移动当前位置图标；不增加 focus request，避免采集时强制移动地图视角
+        viewModelScope.launch {
+            syncRepository.recordedPoints.collect { point ->
+                if (point.trackId == id) updateCurrent(point.lon, point.lat, point.timeMillis)
+            }
         }
     }
 
@@ -59,8 +65,17 @@ class TrackDetailViewModel(
         if (_state.value.track == null) _state.update { it.copy(loading = true, error = null) }
         try {
             val track = repository.detail(id); val points = repository.points(id)
-            _state.update { it.copy(loading = false, error = null, track = track,
-                days = DayGrouper.group(points.mapNotNull(PointDto::toLite)), points = points) }
+            val litePoints = points.mapNotNull(PointDto::toLite)
+            val recordedFallback = if (track.track_status == "RECORDING" && track.track_record_mode == "AUTO") {
+                litePoints.maxByOrNull(PointLite::time)?.copy(id = "current")
+            } else null
+            _state.update { old ->
+                val current = recordedFallback?.takeIf { fallback ->
+                    old.current == null || fallback.time.isAfter(old.current.time)
+                } ?: old.current
+                old.copy(loading = false, error = null, track = track,
+                    days = DayGrouper.group(litePoints), points = points, current = current)
+            }
             if (points.isEmpty() && _state.value.current == null) locateCurrent(focus = true, showError = false)
         } catch (error: Throwable) {
             if (_state.value.track == null) _state.update { it.copy(loading = false, error = error.message ?: "加载失败") }
@@ -68,6 +83,14 @@ class TrackDetailViewModel(
     }
 
     fun focusCurrentLocation() = locateCurrent(focus = true, showError = true)
+
+    private fun updateCurrent(lon: Double, lat: Double, timeMillis: Long) {
+        val time = (if (timeMillis > 0) timeMillis else System.currentTimeMillis()).toBeijingDateTime()
+        _state.update { old ->
+            if (old.current?.time?.isAfter(time) == true) old
+            else old.copy(current = PointLite("current", time, lon, lat, false))
+        }
+    }
 
     private fun locateCurrent(focus: Boolean, showError: Boolean) = viewModelScope.launch {
         _state.update { it.copy(locatingCurrent = true) }
@@ -97,14 +120,9 @@ class TrackDetailViewModel(
             .onFailure { error -> _state.update { it.copy(error = error.message) } }
     }
     fun updateImage(uri: Uri) = viewModelScope.launch {
-        val compressor = imageCompressor
-        if (compressor == null) {
-            _state.update { it.copy(error = "当前无法编辑代表图") }
-            return@launch
-        }
         _state.update { it.copy(updatingImage = true, error = null) }
         runCatching {
-            val image = withContext(Dispatchers.IO) { compressor.prepareForUpload(uri) }
+            val image = withContext(Dispatchers.IO) { imagePreparer.prepareForUpload(uri) }
             try {
                 repository.updateImage(id, image.file, image.mediaType)
             } finally {
@@ -131,8 +149,7 @@ class TrackDetailViewModel(
         _state.update { it.copy(updatingCheckin = true, error = null) }
         runCatching {
             val uploaded = newImages.map { uri ->
-                val compressor = imageCompressor ?: error("当前无法编辑打卡图片")
-                val image = withContext(Dispatchers.IO) { compressor.prepareForUpload(uri) }
+                val image = withContext(Dispatchers.IO) { imagePreparer.prepareForUpload(uri) }
                 try {
                     repository.uploadImage(image.file, image.mediaType)
                 } finally {

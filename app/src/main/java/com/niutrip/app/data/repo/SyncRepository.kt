@@ -20,13 +20,28 @@ sealed interface FlushResult {
     data class Failed(val cause: Throwable) : FlushResult
 }
 
+data class RecordedTrackPoint(
+    val trackId: String,
+    val lon: Double,
+    val lat: Double,
+    val timeMillis: Long,
+)
+
 class SyncRepository(private val api: ApiService, private val dao: PendingPointDao) {
     // 每批点上传成功后发出 (trackId, 数量)：详情页订阅后可原地刷新，无需退出重进
     private val _uploads = MutableSharedFlow<Pair<String, Int>>(extraBufferCapacity = 16)
     val uploads: SharedFlow<Pair<String, Int>> = _uploads
 
+    // 轨迹点本地入库后立即发出，不等待网络批量上传；详情页据此实时移动当前位置图标
+    private val _recordedPoints = MutableSharedFlow<RecordedTrackPoint>(extraBufferCapacity = 16)
+    val recordedPoints: SharedFlow<RecordedTrackPoint> = _recordedPoints
+
     // 网络恢复/App 启动/采集后可能并发触发补传，串行化避免同一批点重复上传
     private val mutex = Mutex()
+
+    fun notifyPointRecorded(trackId: String, lon: Double, lat: Double, timeMillis: Long) {
+        _recordedPoints.tryEmit(RecordedTrackPoint(trackId, lon, lat, timeMillis))
+    }
 
     suspend fun flushOnce(): FlushResult = mutex.withLock {
         val pending = dao.takeFirst(200)

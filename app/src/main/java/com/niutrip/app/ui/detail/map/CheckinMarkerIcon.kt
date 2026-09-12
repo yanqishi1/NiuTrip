@@ -14,8 +14,13 @@ import android.graphics.Typeface
 import android.util.TypedValue
 import kotlin.math.ceil
 
-internal fun createCheckinMarkerBitmap(context: Context, name: String?, thumbnail: Bitmap?): Bitmap {
-    val density = context.resources.displayMetrics.density
+internal fun createCheckinMarkerBitmap(
+    context: Context,
+    name: String?,
+    thumbnail: Bitmap?,
+    scale: Float = 1f,
+): Bitmap {
+    val density = context.resources.displayMetrics.density * scale.coerceIn(.5f, 1f)
     val shadow = 3 * density
     val padding = 6 * density
     val previewSize = 56 * density
@@ -26,7 +31,7 @@ internal fun createCheckinMarkerBitmap(context: Context, name: String?, thumbnai
     val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(55, 66, 49)
         textSize = TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_SP, 12f, context.resources.displayMetrics)
+            TypedValue.COMPLEX_UNIT_SP, 12f * scale.coerceIn(.5f, 1f), context.resources.displayMetrics)
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
@@ -119,6 +124,38 @@ internal fun createCheckinMarkerBitmap(context: Context, name: String?, thumbnai
     return bitmap
 }
 
+/** 中远景使用无标题小图钉，避免缩小后的照片和文字成为不可辨识的噪点。 */
+internal fun createCompactCheckinMarkerBitmap(context: Context): Bitmap {
+    val density = context.resources.displayMetrics.density
+    val shadow = 2 * density
+    val diameter = 20 * density
+    val tailHeight = 7 * density
+    val width = ceil(diameter + shadow * 2).toInt()
+    val centerX = width / 2f
+    val centerY = shadow + diameter / 2f
+    val tipY = shadow + diameter + tailHeight
+    val height = ceil(tipY + shadow).toInt()
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    val green = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(93, 137, 74)
+        setShadowLayer(shadow, 0f, density, 0x33000000)
+    }
+    canvas.drawCircle(centerX, centerY, diameter / 2f, green)
+    green.clearShadowLayer()
+    canvas.drawPath(Path().apply {
+        moveTo(centerX - 5 * density, centerY + diameter / 2f - 2 * density)
+        lineTo(centerX, tipY)
+        lineTo(centerX + 5 * density, centerY + diameter / 2f - 2 * density)
+        close()
+    }, green)
+    canvas.drawCircle(centerX, centerY, 5 * density,
+        Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(255, 252, 242) })
+    canvas.drawCircle(centerX, centerY, 2 * density,
+        Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(93, 137, 74) })
+    return bitmap
+}
+
 internal enum class EndpointMarkerType { START, END, ROUND_TRIP }
 
 internal val EndpointMarkerType.label: String get() = when (this) {
@@ -142,8 +179,10 @@ internal data class EndpointMarkerArtwork(
 internal fun createEndpointMarkerArtwork(
     context: Context,
     type: EndpointMarkerType,
+    scale: Float = 1f,
 ): EndpointMarkerArtwork {
-    val density = context.resources.displayMetrics.density
+    val normalizedScale = scale.coerceIn(.5f, 1f)
+    val density = context.resources.displayMetrics.density * normalizedScale
     val label = type.label
     val accent = type.color
     val shadow = 3 * density
@@ -188,7 +227,7 @@ internal fun createEndpointMarkerArtwork(
     val text = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
         color = accent
         textSize = TypedValue.applyDimension(
-            TypedValue.COMPLEX_UNIT_SP, 13f, context.resources.displayMetrics)
+            TypedValue.COMPLEX_UNIT_SP, 13f * normalizedScale, context.resources.displayMetrics)
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
         textAlign = Paint.Align.CENTER
     }
@@ -200,6 +239,58 @@ internal fun createEndpointMarkerArtwork(
         anchorU = pointX / width,
         anchorV = tipY / height,
     )
+}
+
+/** 远景端点只保留语义和准确落点，不展示占据大面积地图的路牌。 */
+internal fun createCompactEndpointMarkerArtwork(
+    context: Context,
+    type: EndpointMarkerType,
+): EndpointMarkerArtwork {
+    val density = context.resources.displayMetrics.density
+    val shadow = 2 * density
+    val diameter = 24 * density
+    val tailHeight = 7 * density
+    val width = ceil(diameter + shadow * 2).toInt()
+    val centerX = width / 2f
+    val centerY = shadow + diameter / 2f
+    val tipY = shadow + diameter + tailHeight
+    val height = ceil(tipY + shadow).toInt()
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    val accent = type.color
+    val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.rgb(255, 249, 232)
+        setShadowLayer(shadow, 0f, density, 0x33000000)
+    }
+    canvas.drawCircle(centerX, centerY, diameter / 2f, fill)
+    fill.clearShadowLayer()
+    canvas.drawCircle(centerX, centerY, diameter / 2f,
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = accent
+            style = Paint.Style.STROKE
+            strokeWidth = 2 * density
+        })
+    val tail = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent }
+    canvas.drawPath(Path().apply {
+        moveTo(centerX - 5 * density, centerY + diameter / 2f - 2 * density)
+        lineTo(centerX, tipY)
+        lineTo(centerX + 5 * density, centerY + diameter / 2f - 2 * density)
+        close()
+    }, tail)
+    val shortLabel = when (type) {
+        EndpointMarkerType.START -> "起"
+        EndpointMarkerType.END -> "终"
+        EndpointMarkerType.ROUND_TRIP -> "返"
+    }
+    val text = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = accent
+        textSize = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_SP, 11f, context.resources.displayMetrics)
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        textAlign = Paint.Align.CENTER
+    }
+    canvas.drawText(shortLabel, centerX, centerY - (text.descent() + text.ascent()) / 2f, text)
+    return EndpointMarkerArtwork(bitmap, centerX / width, tipY / height)
 }
 
 private fun drawClover(

@@ -36,7 +36,7 @@ import com.niutrip.app.ui.theme.Green700
         title = { Text("允许后台记录") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("自动轨迹需要以下权限。切换到其他 APP 或锁屏后，系统仍会通过前台服务每 10 分钟记录位置。")
+                Text("自动轨迹需要以下权限。切换到其他 APP 或锁屏后，系统仍会通过前台服务继续记录位置。")
                 Spacer(Modifier.height(2.dp))
                 PermissionAction("精确定位", status.fineLocation, Icons.Outlined.LocationOn, onFineLocation)
                 PermissionAction("始终允许定位", status.backgroundLocation, Icons.Outlined.LocationOn, onBackgroundLocation)

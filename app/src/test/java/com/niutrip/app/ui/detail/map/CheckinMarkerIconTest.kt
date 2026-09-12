@@ -49,6 +49,32 @@ class CheckinMarkerIconTest {
         assertTrue(Color.red(end.getPixel(borderX, borderY)) > Color.green(end.getPixel(borderX, borderY)))
     }
 
+    @Test fun `card markers shrink with the map presentation scale`() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val fullCheckin = createCheckinMarkerBitmap(context, "武汉", null)
+        val reducedCheckin = createCheckinMarkerBitmap(context, "武汉", null, .7f)
+        val fullEndpoint = createEndpointMarkerArtwork(context, EndpointMarkerType.START).bitmap
+        val reducedEndpoint = createEndpointMarkerArtwork(context, EndpointMarkerType.START, .7f).bitmap
+
+        assertTrue(reducedCheckin.width < fullCheckin.width)
+        assertTrue(reducedCheckin.height < fullCheckin.height)
+        assertTrue(reducedEndpoint.width < fullEndpoint.width)
+        assertTrue(reducedEndpoint.height < fullEndpoint.height)
+    }
+
+    @Test fun `compact markers occupy less space than full cards and signs`() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val compactCheckin = createCompactCheckinMarkerBitmap(context)
+        val fullCheckin = createCheckinMarkerBitmap(context, "武汉", null)
+        val compactEndpoint = createCompactEndpointMarkerArtwork(context, EndpointMarkerType.START).bitmap
+        val fullEndpoint = createEndpointMarkerArtwork(context, EndpointMarkerType.START).bitmap
+
+        assertTrue(compactCheckin.width < fullCheckin.width)
+        assertTrue(compactCheckin.height < fullCheckin.height)
+        assertTrue(compactEndpoint.width < fullEndpoint.width)
+        assertTrue(compactEndpoint.height < fullEndpoint.height)
+    }
+
     @Test fun `current location endpoint label is rendered below the map anchor`() {
         val context = ApplicationProvider.getApplicationContext<Application>()
         val plain = createCurrentLocationMarkerArtwork(context, avatar = null)

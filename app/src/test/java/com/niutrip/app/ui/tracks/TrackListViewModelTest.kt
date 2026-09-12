@@ -74,6 +74,40 @@ class TrackListViewModelTest {
         assertNull(vm.state.value.notice)
     }
 
+    @Test fun `deleting owned track removes it from mine list`() {
+        val track = trackDto("mine", shared = false)
+        var deletedId: String? = null
+        val api = object : StubApi() {
+            override suspend fun tracks(scope: String) = listOf(track)
+            override suspend fun deleteTrack(id: String) { deletedId = id }
+        }
+        val vm = TrackListViewModel(TrackRepository(api, FakeDao))
+        vm.refresh()
+
+        vm.delete(track, shared = false)
+
+        assertEquals("mine", deletedId)
+        assertTrue(vm.state.value.mine.isEmpty())
+        assertEquals("轨迹已删除", vm.state.value.notice)
+    }
+
+    @Test fun `removing received track only calls received share endpoint`() {
+        val track = trackDto("shared", shared = true)
+        var removedId: String? = null
+        val api = object : StubApi() {
+            override suspend fun tracks(scope: String) = listOf(track)
+            override suspend fun deleteReceivedShare(id: String) { removedId = id }
+        }
+        val vm = TrackListViewModel(TrackRepository(api, FakeDao))
+        vm.select(TrackScope.SHARED)
+
+        vm.delete(track, shared = true)
+
+        assertEquals("shared", removedId)
+        assertTrue(vm.state.value.shared.isEmpty())
+        assertEquals("已从「分享给我的」移除", vm.state.value.notice)
+    }
+
     private fun shareData() = ShareDataDto(
         track = ShareTrackDto(
             track_id = "t1",
@@ -83,6 +117,14 @@ class TrackListViewModelTest {
             share_mode = "PUBLIC",
         ),
         stats = ShareStatsDto(0, 0, 0),
+    )
+
+    private fun trackDto(id: String, shared: Boolean) = TrackDto(
+        track_id = id,
+        track_name = "轨迹$id",
+        track_record_mode = "AUTO",
+        track_status = "FINISHED",
+        sharer_username = "好友".takeIf { shared },
     )
 
     private object FakeDao : TrackDao {

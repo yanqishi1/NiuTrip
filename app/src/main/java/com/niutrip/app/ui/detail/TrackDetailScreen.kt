@@ -91,6 +91,7 @@ import com.niutrip.app.ui.theme.*
     // 进入/返回本页都刷新：打卡发布完 popBackStack 回来立即可见新点位与计数
     LaunchedEffect(Unit) { viewModel.load() }
     var menu by remember { mutableStateOf(false) }; var rename by remember { mutableStateOf(false) }; var delete by remember { mutableStateOf(false) }
+    var finishPrompt by remember { mutableStateOf(false) }
     var exitPrompt by remember { mutableStateOf(false) }
     val backgroundRecording = !readOnly && state.track?.track_status == "RECORDING" && state.track?.track_record_mode == "AUTO"
     val requestBack = { if (backgroundRecording) exitPrompt = true else onBack() }
@@ -170,7 +171,11 @@ import com.niutrip.app.ui.theme.*
                                     showRecordingPermissions = true
                                 }
                             }, Modifier.weight(1f)) { Text("开始记录") }
-                            TrackStateMachine.canFinish(track.track_status.asTrackStatus()) -> OutlinedButton({ viewModel.changeStatus("FINISHED") { onStopService() } }, Modifier.weight(1f), colors = ButtonDefaults.outlinedButtonColors(contentColor = Danger)) { Text("结束记录") }
+                            TrackStateMachine.canFinish(track.track_status.asTrackStatus()) -> OutlinedButton(
+                                onClick = { finishPrompt = true },
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Danger),
+                            ) { Text("结束记录") }
                         }
                         if (TrackStateMachine.canCheckin(track.track_status.asTrackStatus())) OutlinedButton({ onCheckin(track.track_id) }, Modifier.weight(1f)) { Text("手动打卡") }
                         OutlinedButton({ onShare(track.track_id) }, Modifier.weight(1f)) { Text("分享") }
@@ -188,9 +193,23 @@ import com.niutrip.app.ui.theme.*
         if (backgroundRecording) onStopService()
         viewModel.delete()
     }) { Text("删除", color = Danger) } }, dismissButton = { TextButton({ delete = false }) { Text("取消") } })
+    if (finishPrompt) AlertDialog(
+        onDismissRequest = { finishPrompt = false },
+        title = { Text("结束这条轨迹？") },
+        text = { Text("结束后将停止记录当前位置，轨迹不能继续记录。") },
+        confirmButton = {
+            TextButton(onClick = {
+                finishPrompt = false
+                viewModel.changeStatus("FINISHED") { onStopService() }
+            }) { Text("结束轨迹", color = Danger) }
+        },
+        dismissButton = {
+            TextButton(onClick = { finishPrompt = false }) { Text("手误，继续记录") }
+        },
+    )
     if (exitPrompt) AlertDialog(
         onDismissRequest = { exitPrompt = false },
-        text = { Text("退出页面后，APP 会默默在后台运行，并继续每 10 分钟记录一次轨迹点。你可以随时回来查看。") },
+        text = { Text("退出页面后，APP 会默默在后台运行，并继续记录轨迹点。你可以随时回来查看。") },
         confirmButton = { TextButton(onClick = { exitPrompt = false; onBack() }) { Text("确定") } },
     )
     // 操作失败（如"已有正在记录的轨迹"的 409）弹窗提示；首屏加载失败走 LoadingOrError，不在此重复

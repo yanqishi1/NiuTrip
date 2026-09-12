@@ -22,6 +22,7 @@ data class TrackListState(
     val importing: Boolean = false,
     val importError: String? = null,
     val notice: String? = null,
+    val deletingTrackId: String? = null,
 )
 
 class TrackListViewModel(private val repository: TrackRepository) : ViewModel() {
@@ -34,6 +35,28 @@ class TrackListViewModel(private val repository: TrackRepository) : ViewModel() 
     }
     fun setImportLink(value: String) = _state.update { it.copy(importLink = value, importError = null) }
     fun consumeNotice() = _state.update { it.copy(notice = null) }
+
+    fun delete(track: TrackDto, shared: Boolean, onDeleted: () -> Unit = {}) = viewModelScope.launch {
+        _state.update { it.copy(deletingTrackId = track.track_id) }
+        runCatching {
+            if (shared) repository.deleteShared(track.track_id) else repository.delete(track.track_id)
+        }.onSuccess {
+            _state.update {
+                if (shared) it.copy(
+                    shared = it.shared.filterNot { row -> row.track_id == track.track_id },
+                    deletingTrackId = null,
+                    notice = "已从「分享给我的」移除",
+                ) else it.copy(
+                    mine = it.mine.filterNot { row -> row.track_id == track.track_id },
+                    deletingTrackId = null,
+                    notice = "轨迹已删除",
+                )
+            }
+            onDeleted()
+        }.onFailure { error ->
+            _state.update { it.copy(deletingTrackId = null, notice = error.message ?: "删除失败，请稍后重试") }
+        }
+    }
 
     fun importShared() {
         val token = DeepLinkHandler.parseSharedText(_state.value.importLink)

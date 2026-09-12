@@ -33,7 +33,7 @@ import com.niutrip.app.ui.theme.*
             Text("轨迹名称", fontWeight = FontWeight.Bold)
             OutlinedTextField(state.name, viewModel::setName, Modifier.fillMaxWidth(), placeholder = { Text("例如：川西环线之旅") }, singleLine = true, shape = RoundedCornerShape(12.dp))
             Text("记录方式", fontWeight = FontWeight.Bold)
-            ModeCard("AUTO", "自动记录", "每 10 分钟记录一次位置", Icons.Outlined.LocationOn, state.mode == "AUTO", viewModel::setMode)
+            ModeCard("AUTO", "自动记录", "行程中自动记录位置", Icons.Outlined.LocationOn, state.mode == "AUTO", viewModel::setMode)
             ModeCard("MANUAL", "仅手动", "只在打卡时记录位置", Icons.Outlined.PanTool, state.mode == "MANUAL", viewModel::setMode)
             if (state.result == CreateResult.NeedPermission) {
                 Column(Modifier.fillMaxWidth().background(Color(0xFFFFFAF0), RoundedCornerShape(8.dp)).border(1.dp, Color(0xFFFFE6BD), RoundedCornerShape(8.dp)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {

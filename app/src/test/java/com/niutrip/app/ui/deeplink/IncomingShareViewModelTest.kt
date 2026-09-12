@@ -34,6 +34,22 @@ class IncomingShareViewModelTest {
         assertEquals(IncomingShareDecision.PROMPT, viewModel.decision.value)
     }
 
+    @Test fun `already saved clipboard share is ignored`() = runTest {
+        val api = object : StubApi() {
+            override suspend fun inspectShare(token: String) = ShareInspectOut(is_owner = false, is_saved = true)
+        }
+        val viewModel = IncomingShareViewModel("saved", api, ignoreAlreadySaved = true)
+        assertEquals(IncomingShareDecision.IGNORE, viewModel.decision.value)
+    }
+
+    @Test fun `already saved explicit link can still be opened`() = runTest {
+        val api = object : StubApi() {
+            override suspend fun inspectShare(token: String) = ShareInspectOut(is_owner = false, is_saved = true)
+        }
+        val viewModel = IncomingShareViewModel("saved", api, ignoreAlreadySaved = false)
+        assertEquals(IncomingShareDecision.PROMPT, viewModel.decision.value)
+    }
+
     @Test fun `invalid or unreachable share link does not prompt`() = runTest {
         val api = object : StubApi() {
             override suspend fun inspectShare(token: String): ShareInspectOut = error("offline")

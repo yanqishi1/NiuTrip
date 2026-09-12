@@ -2,10 +2,18 @@ package com.niutrip.app.core
 
 import com.niutrip.app.data.local.FakePendingPointDao
 import com.niutrip.app.service.LocResult
+import com.niutrip.app.service.LocationProfile
+import com.niutrip.app.service.LocationSource
 import com.niutrip.app.service.Recorder
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -13,11 +21,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RecorderTest {
-    @Test fun `automatic mode records every ten minutes`() = assertEquals(10 * 60_000L, Recorder.DEFAULT_INTERVAL_MS)
-    @Test fun `first collection is immediate`() = assertEquals(0L, Recorder.nextDelay(1_000_000, null, 900_000))
-    @Test fun `returns remaining interval`() = assertEquals(300_000L, Recorder.nextDelay(1_200_000, 600_000, 900_000))
-    @Test fun `overdue collection is immediate`() = assertEquals(0L, Recorder.nextDelay(2_000_000, 100_000, 900_000))
-
     @Test fun `small stationary movement is filtered without triggering upload`() = runTest {
         val dao = FakePendingPointDao()
         var location = LocResult.Success(116.0, 39.0, 1_000, 8f)
@@ -57,20 +60,59 @@ class RecorderTest {
         assertEquals(1, dao.totalInserted)
     }
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    @Test fun `loop paces from last collected point even after upload deletes it`() = runTest {
+    @Test fun `stored point callback receives the durable point`() = runTest {
         val dao = FakePendingPointDao()
-        val clock = { testScheduler.currentTime }
-        val recorder = Recorder({
-            val movement = testScheduler.currentTime / Recorder.DEFAULT_INTERVAL_MS.toDouble() * 0.001
-            LocResult.Success(116.0 + movement, 39.9 + movement, testScheduler.currentTime)
-        }, dao, clock,
-            intervalMs = Recorder.DEFAULT_INTERVAL_MS, afterCollect = { dao.rows.clear() })  // 模拟上传成功后清空本地
+        var stored: LocResult.Success? = null
+        val location = LocResult.Success(116.0, 39.9, 1_000, 6f)
+        val recorder = Recorder({ location }, dao, onPointStored = { stored = it })
+        assertTrue(recorder.collectOnce("t1"))
+        assertEquals(location, stored)
+    }
+
+    @Test fun `stored point callback receives normalized persistence time`() = runTest {
+        val dao = FakePendingPointDao()
+        var stored: LocResult.Success? = null
+        val recorder = Recorder({ LocResult.Success(116.0, 39.9, 0) }, dao,
+            clock = { 12_345L }, onPointStored = { stored = it })
+
+        assertTrue(recorder.collectOnce("t1"))
+
+        assertEquals(12_345L, stored?.timeMillis)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test fun `adaptive loop uploads stored points on the one minute batch timer`() = runTest {
+        val dao = FakePendingPointDao()
+        var fixIndex = 0
+        var flushes = 0
+        val source = object : LocationSource {
+            override suspend fun singleShot(): LocResult = error("continuous stream expected")
+
+            override fun updates(profile: LocationProfile) = flow {
+                while (currentCoroutineContext().isActive) {
+                    val time = testScheduler.currentTime
+                    emit(LocResult.Success(
+                        lon = 116.0 + fixIndex++ * 125.0 / 86_000.0,
+                        lat = 39.0,
+                        timeMillis = time,
+                        accuracyMeters = 5f,
+                        speedMps = 25f,
+                    ))
+                    delay(profile.intervalMs)
+                }
+            }
+        }
+        val recorder = Recorder(source, dao, clock = { testScheduler.currentTime },
+            afterCollect = { flushes++ })
         val job = launch { recorder.runLoop("t1") }
-        advanceTimeBy(5_000)
-        assertEquals(1, dao.totalInserted)  // 只有首点，上传删除后不会连环狂采
-        advanceTimeBy(10 * 60_000)
-        assertEquals(2, dao.totalInserted)  // 满 10 分钟才采第二个
-        job.cancel()
+
+        runCurrent()
+        assertEquals(1, dao.totalInserted)
+        advanceTimeBy(60_001L)
+        runCurrent()
+        assertEquals(1, flushes)
+        assertTrue(dao.totalInserted in 2..4)
+
+        job.cancelAndJoin()
     }
 }

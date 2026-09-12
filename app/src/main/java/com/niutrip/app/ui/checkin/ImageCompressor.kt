@@ -13,8 +13,12 @@ import kotlin.math.roundToInt
 
 data class PreparedImage(val file: File, val mediaType: String, val compressed: Boolean)
 
-class ImageCompressor(private val context: Context) {
-    fun prepareForUpload(uri: Uri): PreparedImage {
+fun interface ImagePreparer {
+    fun prepareForUpload(uri: Uri): PreparedImage
+}
+
+class ImageCompressor(private val context: Context) : ImagePreparer {
+    override fun prepareForUpload(uri: Uri): PreparedImage {
         val mediaType = context.contentResolver.getType(uri)?.takeIf { it.startsWith("image/") } ?: "image/jpeg"
         val extension = MimeTypeMap.getSingleton().getExtensionFromMimeType(mediaType)?.let { ".$it" } ?: ".jpg"
         val source = File.createTempFile("upload_source_", extension, context.cacheDir)

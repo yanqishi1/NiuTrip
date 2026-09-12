@@ -89,7 +89,7 @@ import kotlinx.serialization.Serializable
 )
 @Serializable data class ShareIn(val share_mode: String)
 @Serializable data class ShareOut(val share_mode: String, val share_url: String? = null)
-@Serializable data class ShareInspectOut(val is_owner: Boolean)
+@Serializable data class ShareInspectOut(val is_owner: Boolean, val is_saved: Boolean = false)
 @Serializable data class ShareTrackDto(
     val track_id: String,
     val track_name: String,

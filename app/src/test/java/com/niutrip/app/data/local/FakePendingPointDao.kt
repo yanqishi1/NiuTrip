@@ -8,5 +8,4 @@ open class FakePendingPointDao(initial: List<PendingPointEntity> = emptyList()) 
     override suspend fun takeFirst(count: Int): List<PendingPointEntity> = rows.sortedBy { it.time }.take(count)
     override suspend fun deleteAll(ids: List<Long>) { rows.removeAll { it.id in ids } }
     override suspend fun count(trackId: String?): Int = rows.size
-    override suspend fun lastTime(trackId: String): Long? = rows.maxOfOrNull { it.time }
 }

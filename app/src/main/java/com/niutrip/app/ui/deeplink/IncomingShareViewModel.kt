@@ -10,7 +10,11 @@ import kotlinx.coroutines.launch
 
 enum class IncomingShareDecision { CHECKING, PROMPT, IGNORE }
 
-class IncomingShareViewModel(token: String, api: ApiService) : ViewModel() {
+class IncomingShareViewModel(
+    token: String,
+    api: ApiService,
+    ignoreAlreadySaved: Boolean = true,
+) : ViewModel() {
     private val _decision = MutableStateFlow(IncomingShareDecision.CHECKING)
     val decision = _decision.asStateFlow()
 
@@ -18,7 +22,10 @@ class IncomingShareViewModel(token: String, api: ApiService) : ViewModel() {
         viewModelScope.launch {
             _decision.value = runCatching { apiCall { api.inspectShare(token) } }
                 .fold(
-                    onSuccess = { if (it.is_owner) IncomingShareDecision.IGNORE else IncomingShareDecision.PROMPT },
+                    onSuccess = {
+                        if (it.is_owner || (ignoreAlreadySaved && it.is_saved)) IncomingShareDecision.IGNORE
+                        else IncomingShareDecision.PROMPT
+                    },
                     onFailure = { IncomingShareDecision.IGNORE },
                 )
         }

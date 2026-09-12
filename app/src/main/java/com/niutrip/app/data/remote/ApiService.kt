@@ -17,7 +17,9 @@ interface ApiService {
     @POST("tracks/") suspend fun createTrack(@Body body: TrackCreateIn): TrackDto
     @GET("tracks/{trackId}/") suspend fun track(@Path("trackId") id: String): TrackDto
     @PATCH("tracks/{trackId}/") suspend fun patchTrack(@Path("trackId") id: String, @Body body: TrackPatchIn): TrackDto
-    @DELETE("tracks/{trackId}/") suspend fun deleteTrack(@Path("trackId") id: String): Response<Unit>
+    @Multipart @PUT("tracks/{trackId}/cover/") suspend fun updateTrackCover(@Path("trackId") id: String, @Part image: MultipartBody.Part): TrackDto
+    @DELETE("tracks/{trackId}/") suspend fun deleteTrack(@Path("trackId") id: String)
+    @DELETE("tracks/{trackId}/received-share/") suspend fun deleteReceivedShare(@Path("trackId") id: String)
     @POST("tracks/{trackId}/points/") suspend fun postPoints(@Path("trackId") id: String, @Body body: PointsIn): PostPointsOut
     @GET("tracks/{trackId}/points/") suspend fun points(@Path("trackId") id: String, @Query("page") page: Int = 1): PointsPage
     @PATCH("tracks/{trackId}/points/{pointId}/") suspend fun patchPoint(@Path("trackId") trackId: String, @Path("pointId") pointId: String, @Body body: PointPatchIn): PointDto

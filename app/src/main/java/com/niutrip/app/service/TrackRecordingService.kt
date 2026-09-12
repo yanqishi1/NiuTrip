@@ -1,6 +1,5 @@
 package com.niutrip.app.service
 
-import android.annotation.SuppressLint
 import android.app.AlarmManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,7 +8,6 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
-import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -21,16 +19,11 @@ import kotlinx.coroutines.*
 class TrackRecordingService : Service() {
     private val job = SupervisorJob()
     private val scope = CoroutineScope(job + Dispatchers.IO)
-    private var wakeLock: PowerManager.WakeLock? = null
     private var recordingJob: Job? = null
 
-    @SuppressLint("WakelockTimeout")
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        wakeLock = getSystemService(PowerManager::class.java)
-            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:track-recording")
-            .apply { setReferenceCounted(false); acquire() }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -47,19 +40,29 @@ class TrackRecordingService : Service() {
         val container = (application as NiuTripApp).container
         recordingJob = scope.launch {
             val recorder = Recorder(container.locationSource, container.db.pendingPointDao(),
-                afterCollect = { container.syncRepository.flushOnce() })
+                afterCollect = { container.syncRepository.flushOnce() },
+                onPointStored = { location ->
+                    saveLastPoint(trackId, location)
+                    container.syncRepository.notifyPointRecorded(
+                        trackId = trackId,
+                        lon = location.lon,
+                        lat = location.lat,
+                        timeMillis = location.timeMillis,
+                    )
+                },
+                onStateChanged = { saveMotionState(trackId, it) },
+                initialPoint = lastPoint(trackId),
+                initialState = lastMotionState(trackId))
             if (mode == "MANUAL") {
                 // 手动模式：开始时采一个首点即结束（collectOnce 内部会触发一次补传）
                 recorder.collectOnce(trackId); stopSelf()
-            } else recorder.runLoop(trackId)
+            } else recorder.runLoop(trackId, SignificantMotionMonitor(this@TrackRecordingService).events())
         }
         return if (mode == "MANUAL") START_NOT_STICKY else START_STICKY
     }
 
     override fun onDestroy() {
         job.cancel()
-        wakeLock?.takeIf(PowerManager.WakeLock::isHeld)?.release()
-        wakeLock = null
         // 停止记录时收尾补传；service scope 已取消，挂到 applicationScope
         (application as NiuTripApp).container.let {
             it.applicationScope.launch { it.syncRepository.flushOnce() }
@@ -116,6 +119,14 @@ class TrackRecordingService : Service() {
         private const val ACTIVE_ID = "active_track_id"
         private const val ACTIVE_NAME = "active_track_name"
         private const val ACTIVE_MODE = "active_track_mode"
+        private const val LAST_TRACK_ID = "last_point_track_id"
+        private const val LAST_LON = "last_point_lon"
+        private const val LAST_LAT = "last_point_lat"
+        private const val LAST_TIME = "last_point_time"
+        private const val LAST_ACCURACY = "last_point_accuracy"
+        private const val LAST_SPEED = "last_point_speed"
+        private const val LAST_BEARING = "last_point_bearing"
+        private const val LAST_MOTION_STATE = "last_motion_state"
         private const val EXTRA_TRACK_ID = "track_id"
         private const val EXTRA_TRACK_NAME = "track_name"
         private const val EXTRA_MODE = "mode"
@@ -143,6 +154,46 @@ class TrackRecordingService : Service() {
             return prefs.getString(ACTIVE_ID, null)?.let {
                 Triple(it, prefs.getString(ACTIVE_NAME, "").orEmpty(), prefs.getString(ACTIVE_MODE, null) ?: "AUTO")
             }
+        }
+
+        private fun Context.saveLastPoint(trackId: String, location: LocResult.Success) {
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putString(LAST_TRACK_ID, trackId)
+                .putLong(LAST_LON, location.lon.toBits())
+                .putLong(LAST_LAT, location.lat.toBits())
+                .putLong(LAST_TIME, location.timeMillis)
+                .putFloat(LAST_ACCURACY, location.accuracyMeters)
+                .putFloat(LAST_SPEED, location.speedMps)
+                .putFloat(LAST_BEARING, location.bearingDegrees)
+                .apply()
+        }
+
+        private fun Context.lastPoint(trackId: String): LocResult.Success? {
+            val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+            if (prefs.getString(LAST_TRACK_ID, null) != trackId ||
+                !prefs.contains(LAST_LON) || !prefs.contains(LAST_LAT)) return null
+            return LocResult.Success(
+                lon = Double.fromBits(prefs.getLong(LAST_LON, 0L)),
+                lat = Double.fromBits(prefs.getLong(LAST_LAT, 0L)),
+                timeMillis = prefs.getLong(LAST_TIME, 0L),
+                accuracyMeters = prefs.getFloat(LAST_ACCURACY, Float.NaN),
+                speedMps = prefs.getFloat(LAST_SPEED, Float.NaN),
+                bearingDegrees = prefs.getFloat(LAST_BEARING, Float.NaN),
+            )
+        }
+
+        private fun Context.saveMotionState(trackId: String, state: MotionState) {
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putString(LAST_TRACK_ID, trackId)
+                .putString(LAST_MOTION_STATE, state.name)
+                .apply()
+        }
+
+        private fun Context.lastMotionState(trackId: String): MotionState {
+            val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+            if (prefs.getString(LAST_TRACK_ID, null) != trackId) return MotionState.WARMUP
+            val saved = prefs.getString(LAST_MOTION_STATE, null) ?: return MotionState.WARMUP
+            return runCatching { MotionState.valueOf(saved) }.getOrDefault(MotionState.WARMUP)
         }
     }
 }

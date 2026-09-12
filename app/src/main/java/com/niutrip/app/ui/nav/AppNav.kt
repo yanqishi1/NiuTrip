@@ -91,7 +91,12 @@ private data class Tab(val label: String, val route: String, val icon: ImageVect
             }
             composable(Routes.TRACKS) {
                 val vm: TrackListViewModel = viewModel(factory = ViewModelFactory { TrackListViewModel(container.trackRepository) })
-                TrackListScreen(vm, { nav.navigate(Routes.CREATE) }, { track -> nav.navigate(Routes.detail(track.track_id, track.sharer_username != null)) })
+                TrackListScreen(
+                    vm,
+                    { nav.navigate(Routes.CREATE) },
+                    { track -> nav.navigate(Routes.detail(track.track_id, track.sharer_username != null)) },
+                    { TrackRecordingService.stop(nav.context) },
+                )
             }
             composable(Routes.CREATE) {
                 val vm: CreateTrackViewModel = viewModel(factory = ViewModelFactory { CreateTrackViewModel(container.trackRepository, AndroidPermissionChecker(nav.context)) })
@@ -130,13 +135,16 @@ private data class Tab(val label: String, val route: String, val icon: ImageVect
     }
     val incomingShareToken = pendingToken ?: clipboardToken
     if (incomingShareToken != null && container.tokenStore.token != null && destination?.route != Routes.LOGIN) {
+        val fromClipboard = pendingToken == null && clipboardToken != null
         val dismissIncomingShare = {
             consumeToken()
             consumeClipboardToken()
         }
         val inspectViewModel: IncomingShareViewModel = viewModel(
-            key = "incoming-share-$incomingShareToken",
-            factory = ViewModelFactory { IncomingShareViewModel(incomingShareToken, container.api) },
+            key = "incoming-share-${if (fromClipboard) "clipboard" else "link"}-$incomingShareToken",
+            factory = ViewModelFactory {
+                IncomingShareViewModel(incomingShareToken, container.api, ignoreAlreadySaved = fromClipboard)
+            },
         )
         val decision by inspectViewModel.decision.collectAsState()
         if (decision == IncomingShareDecision.IGNORE) {
