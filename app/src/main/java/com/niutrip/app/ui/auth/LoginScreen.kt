@@ -47,6 +47,16 @@ import com.niutrip.app.ui.theme.*
                 visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
                 trailingIcon = { IconButton({ passwordVisible = !passwordVisible }) { Icon(if (passwordVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, if (passwordVisible) "隐藏密码" else "显示密码") } },
                 singleLine = true, shape = RoundedCornerShape(12.dp))
+            if (state.mode == AuthMode.REGISTER) {
+                // 二次输入密码防手误；小眼睛与主密码框联动
+                val confirmMismatch = state.confirmPassword.isNotBlank() && state.confirmPassword != state.password
+                OutlinedTextField(state.confirmPassword, viewModel::setConfirmPassword, Modifier.fillMaxWidth(), label = { Text("确认密码") }, leadingIcon = { Icon(Icons.Outlined.Lock, null) },
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = { IconButton({ passwordVisible = !passwordVisible }) { Icon(if (passwordVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, if (passwordVisible) "隐藏密码" else "显示密码") } },
+                    isError = confirmMismatch,
+                    supportingText = if (confirmMismatch) { { Text("两次输入的密码不一致", color = MaterialTheme.colorScheme.error) } } else null,
+                    singleLine = true, shape = RoundedCornerShape(12.dp))
+            }
             val error = (state.submit as? AuthSubmitState.Error)?.message
             if (error != null) Text(error, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
             Button(viewModel::submit, Modifier.fillMaxWidth().height(48.dp), enabled = state.submit !is AuthSubmitState.Loading, shape = RoundedCornerShape(24.dp)) {
