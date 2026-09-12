@@ -74,7 +74,7 @@ class TrackRecordingService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun notification(name: String) = NotificationCompat.Builder(this, CHANNEL_ID)
-        .setSmallIcon(R.drawable.ic_launcher)
+        .setSmallIcon(R.mipmap.ic_launcher)
         .setContentTitle("旅行牛牛正在记录")
         .setContentText(if (name.isBlank()) "正在记录旅程" else "正在记录「$name」")
         .setOngoing(true)
