@@ -190,10 +190,8 @@ import com.niutrip.app.ui.theme.*
     }) { Text("删除", color = Danger) } }, dismissButton = { TextButton({ delete = false }) { Text("取消") } })
     if (exitPrompt) AlertDialog(
         onDismissRequest = { exitPrompt = false },
-        title = { Text("退出轨迹？") },
         text = { Text("退出页面后，APP 会默默在后台运行，并继续每 10 分钟记录一次轨迹点。你可以随时回来查看。") },
-        confirmButton = { TextButton(onClick = { exitPrompt = false; onBack() }) { Text("退出轨迹") } },
-        dismissButton = { TextButton(onClick = { exitPrompt = false }) { Text("继续查看") } },
+        confirmButton = { TextButton(onClick = { exitPrompt = false; onBack() }) { Text("确定") } },
     )
     // 操作失败（如"已有正在记录的轨迹"的 409）弹窗提示；首屏加载失败走 LoadingOrError，不在此重复
     if (state.error != null && state.track != null) AlertDialog({ viewModel.dismissError() },
