@@ -7,6 +7,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PhoneAndroid
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -15,6 +17,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.niutrip.app.ui.common.SegmentedControl
@@ -35,8 +38,15 @@ import com.niutrip.app.ui.theme.*
             { viewModel.setMode(if (it == 0) AuthMode.LOGIN else AuthMode.REGISTER) }, Modifier.padding(horizontal = 28.dp))
         Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (state.mode == AuthMode.REGISTER) OutlinedTextField(state.username, viewModel::setUsername, Modifier.fillMaxWidth(), label = { Text("用户名") }, leadingIcon = { Icon(Icons.Outlined.Person, null) }, singleLine = true, shape = RoundedCornerShape(12.dp))
-            OutlinedTextField(state.identifier, viewModel::setIdentifier, Modifier.fillMaxWidth(), label = { Text("手机号 / 邮箱") }, leadingIcon = { Icon(Icons.Outlined.PhoneAndroid, null) }, singleLine = true, shape = RoundedCornerShape(12.dp))
-            OutlinedTextField(state.password, viewModel::setPassword, Modifier.fillMaxWidth(), label = { Text("密码") }, leadingIcon = { Icon(Icons.Outlined.Lock, null) }, visualTransformation = PasswordVisualTransformation(), singleLine = true, shape = RoundedCornerShape(12.dp))
+            // 注册时实时校验手机号/邮箱格式（登录不拦，交由服务端判定）
+            val identifierHint = if (state.mode == AuthMode.REGISTER && state.identifier.isNotBlank()) AuthValidation.identifierError(state.identifier) else null
+            OutlinedTextField(state.identifier, viewModel::setIdentifier, Modifier.fillMaxWidth(), label = { Text("手机号 / 邮箱") }, leadingIcon = { Icon(Icons.Outlined.PhoneAndroid, null) }, singleLine = true, shape = RoundedCornerShape(12.dp),
+                isError = identifierHint != null, supportingText = identifierHint?.let { hint -> { Text(hint, color = MaterialTheme.colorScheme.error) } })
+            var passwordVisible by remember { mutableStateOf(false) }
+            OutlinedTextField(state.password, viewModel::setPassword, Modifier.fillMaxWidth(), label = { Text("密码") }, leadingIcon = { Icon(Icons.Outlined.Lock, null) },
+                visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = { IconButton({ passwordVisible = !passwordVisible }) { Icon(if (passwordVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, if (passwordVisible) "隐藏密码" else "显示密码") } },
+                singleLine = true, shape = RoundedCornerShape(12.dp))
             val error = (state.submit as? AuthSubmitState.Error)?.message
             if (error != null) Text(error, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
             Button(viewModel::submit, Modifier.fillMaxWidth().height(48.dp), enabled = state.submit !is AuthSubmitState.Loading, shape = RoundedCornerShape(24.dp)) {

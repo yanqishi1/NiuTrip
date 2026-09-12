@@ -24,6 +24,12 @@ class LoginViewModel(private val repository: AuthRepository) : ViewModel() {
         if (current.identifier.isBlank() || current.password.length < 8 || (current.mode == AuthMode.REGISTER && current.username.isBlank())) {
             _state.update { it.copy(submit = AuthSubmitState.Error("请完整填写账号信息，密码至少 8 位")) }; return
         }
+        // 注册时校验手机号/邮箱格式：不合法直接拦下，不发请求
+        if (current.mode == AuthMode.REGISTER) {
+            AuthValidation.identifierError(current.identifier)?.let { hint ->
+                _state.update { it.copy(submit = AuthSubmitState.Error(hint)) }; return
+            }
+        }
         viewModelScope.launch {
             _state.update { it.copy(submit = AuthSubmitState.Loading) }
             val result = if (current.mode == AuthMode.LOGIN) repository.login(current.identifier, current.password)
