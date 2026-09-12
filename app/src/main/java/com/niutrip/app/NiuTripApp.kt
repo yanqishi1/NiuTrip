@@ -15,6 +15,10 @@ import com.niutrip.app.data.repo.TrackRepository
 import com.niutrip.app.service.AMapLocationSource
 import com.niutrip.app.service.LocationSource
 import com.niutrip.app.service.TrackRecordingService
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import coil.disk.DiskCache
+import coil.memory.MemoryCache
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -22,11 +26,12 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Response
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.kotlinx.serialization.asConverterFactory
 
-class NiuTripApp : Application() {
+class NiuTripApp : Application(), ImageLoaderFactory {
     lateinit var container: AppContainer
         private set
 
@@ -35,6 +40,12 @@ class NiuTripApp : Application() {
         AMapLocationClient.updatePrivacyShow(this, true, true)
         AMapLocationClient.updatePrivacyAgree(this, true)
         container = AppContainer(this)
+        if (container.tokenStore.token != null && !container.tokenStore.hasAvatarSnapshot) {
+            container.applicationScope.launch {
+                runCatching { container.api.profile() }
+                    .onSuccess { container.tokenStore.saveAvatarUrl(it.avata_url) }
+            }
+        }
         // 系统回收进程后，SharedPreferences 中仍保留正在自动记录的轨迹；进程重建时恢复前台服务。
         runCatching { TrackRecordingService.resumeIfActive(this) }
         // 离线补传触发：App 启动 + 网络恢复（记录中的采集点另有 afterCollect 触发）。
@@ -49,6 +60,39 @@ class NiuTripApp : Application() {
                 })
         }
     }
+
+    override fun newImageLoader(): ImageLoader = ImageLoader.Builder(this)
+        .memoryCache {
+            MemoryCache.Builder(this)
+                .maxSizePercent(0.20)
+                .build()
+        }
+        .diskCache {
+            DiskCache.Builder()
+                .directory(cacheDir.resolve("coil_image_cache"))
+                .maxSizeBytes(IMAGE_DISK_CACHE_BYTES)
+                .build()
+        }
+        .okHttpClient {
+            OkHttpClient.Builder()
+                .addNetworkInterceptor { chain ->
+                    chain.proceed(chain.request()).withOneDayImageCache()
+                }
+                .build()
+        }
+        .build()
+}
+
+internal const val IMAGE_CACHE_MAX_AGE_SECONDS = 24 * 60 * 60
+private const val IMAGE_DISK_CACHE_BYTES = 100L * 1024 * 1024
+
+internal fun Response.withOneDayImageCache(): Response {
+    if (!isSuccessful) return this
+    return newBuilder()
+        .removeHeader("Pragma")
+        .removeHeader("Expires")
+        .header("Cache-Control", "public, max-age=$IMAGE_CACHE_MAX_AGE_SECONDS")
+        .build()
 }
 
 @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)

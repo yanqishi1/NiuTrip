@@ -20,16 +20,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import coil.compose.AsyncImage
 import com.niutrip.app.BuildConfig
+import com.niutrip.app.R
 import com.niutrip.app.ui.common.CameraImage
 import com.niutrip.app.ui.common.ImageSourceSheet
+import com.niutrip.app.ui.common.absoluteMediaUrl
 import com.niutrip.app.ui.common.createCameraImage
 import com.niutrip.app.ui.common.hasCamera
 import com.niutrip.app.ui.create.AndroidPermissionChecker
@@ -64,7 +68,17 @@ private enum class ProfileDialog { RENAME, PASSWORD, BINDING, LOGOUT }
         Column(Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Row(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(8.dp)).padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(64.dp).clip(CircleShape).background(Green50).clickable { showAvatarSource = true }, contentAlignment = Alignment.Center) {
-                    if (!state.user?.avata_url.isNullOrBlank()) AsyncImage(absoluteMedia(state.user!!.avata_url!!), null, Modifier.fillMaxSize()) else Icon(Icons.Outlined.Person, null, tint = Green700, modifier = Modifier.size(32.dp))
+                    if (!state.user?.avata_url.isNullOrBlank()) AsyncImage(
+                        model = absoluteMediaUrl(state.user!!.avata_url!!),
+                        contentDescription = "用户头像",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    ) else Image(
+                        painter = painterResource(R.drawable.default_head),
+                        contentDescription = "默认头像",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
                 }
                 Spacer(Modifier.width(14.dp)); Column(Modifier.weight(1f)) { Text(state.user?.username ?: "旅行者", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium); Text(state.user?.user_id.orEmpty(), color = Muted, style = MaterialTheme.typography.bodySmall) }
                 IconButton({ dialog = ProfileDialog.RENAME }) { Icon(Icons.Default.Edit, "编辑用户名") }
@@ -123,4 +137,3 @@ private enum class ProfileDialog { RENAME, PASSWORD, BINDING, LOGOUT }
 @Composable private fun TextInputDialog(title: String, initial: String, dismiss: () -> Unit, confirm: (String) -> Unit) { var value by remember { mutableStateOf(initial) }; AlertDialog(dismiss, title = { Text(title) }, text = { OutlinedTextField(value, { value = it }, singleLine = true) }, confirmButton = { TextButton({ confirm(value) }, enabled = value.isNotBlank()) { Text("保存") } }, dismissButton = { TextButton(dismiss) { Text("取消") } }) }
 @Composable private fun PasswordDialog(dismiss: () -> Unit, confirm: (String, String) -> Unit) { var old by remember { mutableStateOf("") }; var new by remember { mutableStateOf("") }; AlertDialog(dismiss, title = { Text("修改密码") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedTextField(old, { old = it }, label = { Text("当前密码") }); OutlinedTextField(new, { new = it }, label = { Text("新密码（至少 8 位）") }) } }, confirmButton = { TextButton({ confirm(old, new) }, enabled = old.isNotBlank() && new.length >= 8) { Text("保存") } }, dismissButton = { TextButton(dismiss) { Text("取消") } }) }
 @Composable private fun BindingDialog(dismiss: () -> Unit, confirm: (String, String?, String?) -> Unit) { var password by remember { mutableStateOf("") }; var phone by remember { mutableStateOf("") }; var email by remember { mutableStateOf("") }; AlertDialog(dismiss, title = { Text("更新绑定") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedTextField(phone, { phone = it }, label = { Text("手机号") }); OutlinedTextField(email, { email = it }, label = { Text("邮箱") }); OutlinedTextField(password, { password = it }, label = { Text("当前密码") }) } }, confirmButton = { TextButton({ confirm(password, phone, email) }, enabled = password.isNotBlank() && (phone.isNotBlank() || email.isNotBlank())) { Text("保存") } }, dismissButton = { TextButton(dismiss) { Text("取消") } }) }
-private fun absoluteMedia(path: String): String = if (path.startsWith("http")) path else BuildConfig.API_BASE_URL.substringBefore("/api/") + path

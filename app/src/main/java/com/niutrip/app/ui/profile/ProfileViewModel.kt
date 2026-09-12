@@ -32,7 +32,8 @@ class ProfileViewModel(private val api: ApiService, private val tokens: TokenSto
     fun refresh() = viewModelScope.launch {
         _state.update { it.copy(loading = true, message = null) }
         try {
-            val user = apiCall { api.profile() }; val mine = apiCall { api.tracks("mine") }; val shared = apiCall { api.tracks("shared") }
+            val user = apiCall { api.profile() }; tokens.saveAvatarUrl(user.avata_url)
+            val mine = apiCall { api.tracks("mine") }; val shared = apiCall { api.tracks("shared") }
             _state.value = ProfileState(false, user, mine.size, mine.sumOf { it.checkin_count }, shared.size, recording = mine.any { it.track_status == "RECORDING" })
         } catch (error: Throwable) { _state.update { it.copy(loading = false, message = error.message ?: "加载失败") } }
     }
@@ -45,7 +46,9 @@ class ProfileViewModel(private val api: ApiService, private val tokens: TokenSto
             val part = MultipartBody.Part.createFormData("image", image.file.name,
                 image.file.asRequestBody(image.mediaType.toMediaType()))
             val url = apiCall { api.upload(part) }.url
-            _state.update { it.copy(user = apiCall { api.updateProfile(ProfileUpdateIn(avata_url = url)) }) }
+            val user = apiCall { api.updateProfile(ProfileUpdateIn(avata_url = url)) }
+            tokens.saveAvatarUrl(user.avata_url)
+            _state.update { it.copy(user = user) }
         } finally {
             withContext(Dispatchers.IO) { image.file.delete() }
         }

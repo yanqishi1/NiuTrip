@@ -12,16 +12,7 @@ object RouteGeometry {
         return points.firstOrNull()?.let { RouteEndpoints(it, points.last()) }
     }
 
-    fun suppressStationaryDrift(points: List<PointLite>, radiusMeters: Double = 25.0): List<PointLite> {
-        if (points.size <= 2) return points
-        val ordered = points.sortedBy(PointLite::time)
-        val kept = mutableListOf(ordered.first())
-        ordered.drop(1).dropLast(1).forEach { point ->
-            if (distanceMeters(kept.last().lat, kept.last().lon, point.lat, point.lon) >= radiusMeters) kept += point
-        }
-        if (kept.last().id != ordered.last().id) kept += ordered.last()
-        return kept
-    }
+    fun orderedPath(points: List<PointLite>): List<PointLite> = points.sortedBy(PointLite::time)
 
     fun distanceMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
         val dLat = Math.toRadians(lat2 - lat1)

@@ -6,6 +6,7 @@ import com.niutrip.app.data.local.TrackDao
 import com.niutrip.app.data.local.TrackEntity
 import com.niutrip.app.data.remote.ApiException
 import com.niutrip.app.data.remote.PointDto
+import com.niutrip.app.data.remote.PointPatchIn
 import com.niutrip.app.data.remote.PointsIn
 import com.niutrip.app.data.remote.PointsPage
 import com.niutrip.app.data.remote.PostPointsOut
@@ -66,6 +67,37 @@ class TrackDetailViewModelTest {
         val vm = vm(points = listOf(pointDto("p1")), source = { LocResult.Success(99.9, 9.9, 1) })
         vm.load()
         assertNull(vm.state.value.current)
+    }
+
+    @Test fun `location button focuses current position even when track has points`() = runTest {
+        val vm = vm(points = listOf(pointDto("p1")), source = {
+            LocResult.Success(101.25, 30.75, 1_700_000_000_000)
+        })
+        vm.load()
+        vm.focusCurrentLocation()
+        assertEquals(101.25, vm.state.value.current?.lon ?: 0.0, 1e-9)
+        assertEquals(30.75, vm.state.value.current?.lat ?: 0.0, 1e-9)
+        assertEquals(1, vm.state.value.currentFocusRequest)
+        assertFalse(vm.state.value.locatingCurrent)
+    }
+
+    @Test fun `editing checkin updates point and regrouped map data`() = runTest {
+        val original = pointDto("p1")
+        val api = object : StubApi() {
+            override suspend fun track(id: String) = trackDto()
+            override suspend fun points(id: String, page: Int) = PointsPage(1, null, null, listOf(original))
+            override suspend fun patchPoint(trackId: String, pointId: String, body: PointPatchIn) =
+                original.copy(point_name = body.point_name, point_desc = body.point_desc,
+                    point_img_url = body.point_img_url)
+        }
+        val vm = vm(points = listOf(original), source = { LocResult.Failure("x") }, api = api)
+        vm.load()
+        vm.updateCheckin("p1", " 新标题 ", " 新内容 ", listOf("/media/new.jpg"), emptyList())
+        val updated = vm.state.value.days.single().points.single()
+        assertEquals("新标题", updated.name)
+        assertEquals("新内容", updated.desc)
+        assertEquals(listOf("/media/new.jpg"), updated.images)
+        assertFalse(vm.state.value.updatingCheckin)
     }
 
     @Test fun `refresh after checkin reloads points without loading flash`() = runTest {

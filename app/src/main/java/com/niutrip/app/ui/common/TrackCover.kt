@@ -1,12 +1,10 @@
 package com.niutrip.app.ui.common
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Route
-import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -16,11 +14,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
-import com.niutrip.app.BuildConfig
+import com.niutrip.app.R
 import com.niutrip.app.ui.theme.Green50
-import com.niutrip.app.ui.theme.Green700
 
 @Composable
 fun TrackCover(imageUrl: String, modifier: Modifier = Modifier, contentDescription: String? = null) {
@@ -31,15 +29,15 @@ fun TrackCover(imageUrl: String, modifier: Modifier = Modifier, contentDescripti
         contentAlignment = Alignment.Center,
     ) {
         if (useDefault || loadFailed) {
-            Icon(
-                imageVector = Icons.Outlined.Route,
+            Image(
+                painter = painterResource(R.drawable.default_track_logo),
                 contentDescription = contentDescription ?: "默认轨迹代表图",
-                tint = Green700,
-                modifier = Modifier.fillMaxSize(.52f),
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
             )
         } else {
             AsyncImage(
-                model = absoluteMedia(imageUrl),
+                model = absoluteMediaUrl(imageUrl),
                 contentDescription = contentDescription,
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
@@ -48,6 +46,3 @@ fun TrackCover(imageUrl: String, modifier: Modifier = Modifier, contentDescripti
         }
     }
 }
-
-private fun absoluteMedia(path: String): String =
-    if (path.startsWith("http")) path else BuildConfig.API_BASE_URL.substringBefore("/api/") + path

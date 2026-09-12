@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -47,6 +48,7 @@ import com.niutrip.app.ui.theme.*
 @Composable fun TrackDetailScreen(
     viewModel: TrackDetailViewModel,
     readOnly: Boolean,
+    currentUserAvatarUrl: String?,
     onBack: () -> Unit,
     onCheckin: (String) -> Unit,
     onShare: (String) -> Unit,
@@ -61,6 +63,7 @@ import com.niutrip.app.ui.theme.*
     var showRecordingPermissions by remember { mutableStateOf(false) }
     val recordingPermissions = remember(permissionRefresh) { permissionChecker.status() }
     var showImageSource by remember { mutableStateOf(false) }
+    var selectedPointId by remember { mutableStateOf<String?>(null) }
     var pendingCameraImage by remember { mutableStateOf<CameraImage?>(null) }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) {
         it?.let(viewModel::updateImage)
@@ -72,6 +75,12 @@ import com.niutrip.app.ui.theme.*
         pendingCameraImage = null
     }
     val fineLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissionRefresh++ }
+    val selfLocationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        permissionRefresh++
+        if (grants[Manifest.permission.ACCESS_FINE_LOCATION] == true || grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true) {
+            viewModel.focusCurrentLocation()
+        } else viewModel.showError("需要定位权限才能跳转到当前位置")
+    }
     val backgroundLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permissionRefresh++ }
     val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permissionRefresh++ }
     DisposableEffect(lifecycle) {
@@ -90,7 +99,17 @@ import com.niutrip.app.ui.theme.*
     Box(Modifier.fillMaxSize()) {
         if (state.loading || state.error != null && state.track == null) LoadingOrError(state.loading, state.error, viewModel::load)
         else {
-            AMapView(state.days, state.selectedDay, state.days.lastOrNull()?.points?.lastOrNull(), Modifier.fillMaxSize(), current = state.current)
+            AMapView(
+                days = state.days,
+                selectedDayIdx = state.selectedDay,
+                latest = state.days.lastOrNull()?.points?.lastOrNull(),
+                modifier = Modifier.fillMaxSize(),
+                onPointClick = { selectedPointId = it.id },
+                current = state.current,
+                currentAvatarUrl = currentUserAvatarUrl,
+                focusCurrentRequest = state.currentFocusRequest,
+                showRouteEnd = state.track?.track_status == "FINISHED",
+            )
             TopAppBar(title = { Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(state.track?.track_name.orEmpty(), fontWeight = FontWeight.Bold)
                 Spacer(Modifier.width(8.dp)); state.track?.let { StatusPill(statusText(it.track_status), statusColor(it.track_status)) }
@@ -108,6 +127,21 @@ import com.niutrip.app.ui.theme.*
                     DropdownMenuItem({ Text("修改名称") }, onClick = { menu = false; rename = true })
                     DropdownMenuItem({ Text("删除轨迹", color = Danger) }, onClick = { menu = false; delete = true })
                 } } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White.copy(alpha = .94f)))
+            SmallFloatingActionButton(
+                onClick = {
+                    if (permissionChecker.hasFineLocation()) viewModel.focusCurrentLocation()
+                    else selfLocationPermission.launch(arrayOf(
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION,
+                    ))
+                },
+                modifier = Modifier.align(Alignment.TopEnd).padding(top = 84.dp, end = 16.dp),
+                containerColor = Color.White,
+                contentColor = Green700,
+            ) {
+                if (state.locatingCurrent) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                else Icon(Icons.Default.MyLocation, "跳转到当前位置")
+            }
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.White, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)).padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TrackCover(state.track?.track_img_url.orEmpty(), Modifier.size(44.dp), "轨迹代表图")
@@ -165,6 +199,21 @@ import com.niutrip.app.ui.theme.*
     if (state.error != null && state.track != null) AlertDialog({ viewModel.dismissError() },
         title = { Text("操作失败") }, text = { Text(state.error.orEmpty()) },
         confirmButton = { TextButton({ viewModel.dismissError() }) { Text("知道了") } })
+    selectedPointId?.let { pointId ->
+        state.days.flatMap { it.points }.firstOrNull { it.id == pointId }?.let { point ->
+            CheckinDetailSheet(
+                point = point,
+                editable = !readOnly,
+                saving = state.updatingCheckin,
+                onDismiss = { selectedPointId = null },
+                onSave = { name, desc, existingImages, newImages ->
+                    viewModel.updateCheckin(point.id, name, desc, existingImages, newImages) {
+                        selectedPointId = null
+                    }
+                },
+            )
+        }
+    }
     if (showImageSource) ImageSourceSheet(
         onDismiss = { showImageSource = false },
         cameraAvailable = hasCamera(context),

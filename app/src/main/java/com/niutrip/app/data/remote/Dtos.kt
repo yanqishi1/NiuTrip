@@ -57,6 +57,11 @@ import kotlinx.serialization.Serializable
 )
 @Serializable data class PointsIn(val points: List<PointIn>)
 @Serializable data class PostPointsOut(val count: Int)
+@Serializable data class PointPatchIn(
+    val point_name: String? = null,
+    val point_desc: String? = null,
+    val point_img_url: List<String> = emptyList(),
+)
 @Serializable data class PointDto(
     val point_id: String,
     val point_longitude: Double? = null,
@@ -84,6 +89,7 @@ import kotlinx.serialization.Serializable
 )
 @Serializable data class ShareIn(val share_mode: String)
 @Serializable data class ShareOut(val share_mode: String, val share_url: String? = null)
+@Serializable data class ShareInspectOut(val is_owner: Boolean)
 @Serializable data class ShareTrackDto(
     val track_id: String,
     val track_name: String,

@@ -25,6 +25,8 @@ import com.niutrip.app.ui.checkin.CheckinViewModel
 import com.niutrip.app.ui.checkin.ImageCompressor
 import com.niutrip.app.ui.detail.TrackDetailScreen
 import com.niutrip.app.ui.detail.TrackDetailViewModel
+import com.niutrip.app.ui.deeplink.IncomingShareDecision
+import com.niutrip.app.ui.deeplink.IncomingShareViewModel
 import com.niutrip.app.ui.profile.ProfileScreen
 import com.niutrip.app.ui.profile.ProfileViewModel
 import com.niutrip.app.ui.share.ShareSheet
@@ -62,6 +64,7 @@ private data class Tab(val label: String, val route: String, val icon: ImageVect
     val nav = rememberNavController()
     val entry by nav.currentBackStackEntryAsState()
     val destination = entry?.destination
+    val currentUserAvatarUrl by container.tokenStore.avatarUrl.collectAsState()
     val tabs = listOf(Tab("轨迹", Routes.TRACKS, Icons.Default.Map), Tab("我的", Routes.PROFILE, Icons.Default.Person))
     val showBar = destination?.route in tabs.map(Tab::route)
     var shareTrackId by remember { mutableStateOf<String?>(null) }
@@ -100,7 +103,7 @@ private data class Tab(val label: String, val route: String, val icon: ImageVect
                 val vm: TrackDetailViewModel = viewModel(key = "detail-$id", factory = ViewModelFactory {
                     TrackDetailViewModel(id, container.trackRepository, container.locationSource, container.syncRepository, ImageCompressor(nav.context))
                 })
-                TrackDetailScreen(vm, readOnly, nav::popBackStack, { nav.navigate(Routes.checkin(it)) }, { shareTrackId = it },
+                TrackDetailScreen(vm, readOnly, currentUserAvatarUrl, nav::popBackStack, { nav.navigate(Routes.checkin(it)) }, { shareTrackId = it },
                     { trackId, name, mode -> TrackRecordingService.start(nav.context, trackId, name, mode) }, { TrackRecordingService.stop(nav.context) })
             }
             composable(Routes.CHECKIN) { backStack ->
@@ -110,8 +113,10 @@ private data class Tab(val label: String, val route: String, val icon: ImageVect
             }
             composable(Routes.SHARE_VIEW) { backStack ->
                 val token = backStack.arguments?.getString("token").orEmpty()
-                val vm: ShareViewViewModel = viewModel(key = "share-view-$token", factory = ViewModelFactory { ShareViewViewModel(token, container.api) })
-                ShareViewScreen(vm, nav::popBackStack)
+                val vm: ShareViewViewModel = viewModel(key = "share-view-$token", factory = ViewModelFactory {
+                    ShareViewViewModel(token, container.api, container.locationSource)
+                })
+                ShareViewScreen(vm, currentUserAvatarUrl, nav::popBackStack)
             }
             composable(Routes.PROFILE) {
                 val vm: ProfileViewModel = viewModel(factory = ViewModelFactory { ProfileViewModel(container.api, container.tokenStore, ImageCompressor(nav.context)) })
@@ -129,17 +134,26 @@ private data class Tab(val label: String, val route: String, val icon: ImageVect
             consumeToken()
             consumeClipboardToken()
         }
-        AlertDialog(
-            onDismissRequest = dismissIncomingShare,
-            title = { Text("加入分享轨迹？") },
-            text = { Text("检测到一条轨迹分享链接，是否加入到「分享给我的」列表？") },
-            confirmButton = {
-                TextButton(onClick = {
-                    dismissIncomingShare()
-                    nav.navigate(Routes.share(incomingShareToken))
-                }) { Text("加入并查看") }
-            },
-            dismissButton = { TextButton(onClick = dismissIncomingShare) { Text("暂不加入") } },
+        val inspectViewModel: IncomingShareViewModel = viewModel(
+            key = "incoming-share-$incomingShareToken",
+            factory = ViewModelFactory { IncomingShareViewModel(incomingShareToken, container.api) },
         )
+        val decision by inspectViewModel.decision.collectAsState()
+        if (decision == IncomingShareDecision.IGNORE) {
+            LaunchedEffect(incomingShareToken) { dismissIncomingShare() }
+        } else if (decision == IncomingShareDecision.PROMPT) {
+            AlertDialog(
+                onDismissRequest = dismissIncomingShare,
+                title = { Text("加入分享轨迹？") },
+                text = { Text("检测到一条好友分享的轨迹链接，是否加入到「分享给我的」列表？") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        dismissIncomingShare()
+                        nav.navigate(Routes.share(incomingShareToken))
+                    }) { Text("加入并查看") }
+                },
+                dismissButton = { TextButton(onClick = dismissIncomingShare) { Text("暂不加入") } },
+            )
+        }
     }
 }

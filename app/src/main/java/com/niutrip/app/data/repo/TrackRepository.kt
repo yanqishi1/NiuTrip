@@ -32,10 +32,15 @@ class TrackRepository(private val api: ApiService, private val tracks: TrackDao)
     suspend fun patch(id: String, body: TrackPatchIn) = apiCall { api.patchTrack(id, body) }
         .also { tracks.upsert(TrackEntity.from(it)) }
     suspend fun updateImage(id: String, file: File, mediaType: String): TrackDto {
-        val part = MultipartBody.Part.createFormData("image", file.name, file.asRequestBody(mediaType.toMediaType()))
-        val url = apiCall { api.upload(part) }.url
+        val url = uploadImage(file, mediaType)
         return patch(id, TrackPatchIn(track_img_url = url))
     }
+    suspend fun uploadImage(file: File, mediaType: String): String {
+        val part = MultipartBody.Part.createFormData("image", file.name, file.asRequestBody(mediaType.toMediaType()))
+        return apiCall { api.upload(part) }.url
+    }
+    suspend fun updateCheckin(trackId: String, pointId: String, body: PointPatchIn): PointDto =
+        apiCall { api.patchPoint(trackId = trackId, pointId = pointId, body = body) }
     suspend fun delete(id: String) { apiCall { api.deleteTrack(id) }; refreshCacheWithout(id) }
     suspend fun points(id: String): List<PointDto> {
         val all = mutableListOf<PointDto>()

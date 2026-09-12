@@ -20,8 +20,10 @@ open class StubApi : ApiService {
     override suspend fun deleteTrack(id: String): Response<Unit> = TODO()
     override suspend fun postPoints(id: String, body: PointsIn): PostPointsOut = TODO()
     override suspend fun points(id: String, page: Int): PointsPage = TODO()
+    override suspend fun patchPoint(trackId: String, pointId: String, body: PointPatchIn): PointDto = TODO()
     override suspend fun share(id: String, body: ShareIn): ShareOut = TODO()
     override suspend fun revokeShare(id: String): Response<Unit> = TODO()
+    override suspend fun inspectShare(token: String): ShareInspectOut = TODO()
     override suspend fun shareView(token: String): ShareDataDto = TODO()
     override suspend fun shareSave(token: String): ShareDataDto = TODO()
 }

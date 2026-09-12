@@ -99,7 +99,8 @@ import coil.request.SuccessResult
         val pointLookup = mutableMapOf<String, PointLite>()
         visibleDays.forEach { day ->
             val index = days.indexOf(day)
-            val points = RouteGeometry.suppressStationaryDrift(day.points).map { LatLng(it.lat, it.lon) }
+            // The visible point markers and the polyline must use the same point set.
+            val points = RouteGeometry.orderedPath(day.points).map { LatLng(it.lat, it.lon) }
             if (points.size >= 2) map.addPolyline(PolylineOptions().addAll(points).width(10f).color(dayColor(index).toInt()).geodesic(true))
             day.points.forEach { point ->
                 val position = LatLng(point.lat, point.lon); bounds.include(position)

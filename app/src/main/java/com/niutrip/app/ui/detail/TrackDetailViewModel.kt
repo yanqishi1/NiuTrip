@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.niutrip.app.core.*
 import com.niutrip.app.data.remote.PointDto
+import com.niutrip.app.data.remote.PointPatchIn
 import com.niutrip.app.data.remote.TrackDto
 import com.niutrip.app.data.remote.TrackPatchIn
 import com.niutrip.app.data.repo.SyncRepository
@@ -28,7 +29,10 @@ data class DetailState(
     val error: String? = null,
     val deleted: Boolean = false,
     val current: PointLite? = null,  // 空轨迹时的当前位置，供地图聚焦
+    val locatingCurrent: Boolean = false,
+    val currentFocusRequest: Int = 0,
     val updatingImage: Boolean = false,
+    val updatingCheckin: Boolean = false,
 )
 
 class TrackDetailViewModel(
@@ -48,6 +52,7 @@ class TrackDetailViewModel(
     }
 
     fun dismissError() = _state.update { it.copy(error = null) }
+    fun showError(message: String) = _state.update { it.copy(error = message) }
 
     // 静默刷新：已有内容时不闪全屏 loading；失败时保留旧内容（只有首屏失败才显示错误页）
     fun load() = viewModelScope.launch {
@@ -56,21 +61,28 @@ class TrackDetailViewModel(
             val track = repository.detail(id); val points = repository.points(id)
             _state.update { it.copy(loading = false, error = null, track = track,
                 days = DayGrouper.group(points.mapNotNull(PointDto::toLite)), points = points) }
-            if (points.isEmpty()) locateCurrent()
+            if (points.isEmpty() && _state.value.current == null) locateCurrent(focus = true, showError = false)
         } catch (error: Throwable) {
             if (_state.value.track == null) _state.update { it.copy(loading = false, error = error.message ?: "加载失败") }
         }
     }
 
-    // 空轨迹：取当前位置给地图聚焦；失败静默，保持默认视角
-    private fun locateCurrent() = viewModelScope.launch {
+    fun focusCurrentLocation() = locateCurrent(focus = true, showError = true)
+
+    private fun locateCurrent(focus: Boolean, showError: Boolean) = viewModelScope.launch {
+        _state.update { it.copy(locatingCurrent = true) }
         when (val location = locationSource.singleShot()) {
             is LocResult.Success -> {
                 val time = if (location.timeMillis > 0) location.timeMillis else System.currentTimeMillis()
                 _state.update { it.copy(current = PointLite("current", time.toBeijingDateTime(),
-                    location.lon, location.lat, false, null, null, emptyList())) }
+                    location.lon, location.lat, false, null, null, emptyList()),
+                    locatingCurrent = false,
+                    currentFocusRequest = if (focus) it.currentFocusRequest + 1 else it.currentFocusRequest) }
             }
-            is LocResult.Failure -> Unit
+            is LocResult.Failure -> _state.update {
+                it.copy(locatingCurrent = false,
+                    error = if (showError) location.reason else it.error)
+            }
         }
     }
     fun selectDay(index: Int) = _state.update { it.copy(selectedDay = index) }
@@ -102,6 +114,45 @@ class TrackDetailViewModel(
             _state.update { it.copy(track = track, updatingImage = false) }
         }.onFailure { error ->
             _state.update { it.copy(updatingImage = false, error = error.message ?: "代表图更新失败") }
+        }
+    }
+    fun updateCheckin(
+        pointId: String,
+        name: String,
+        desc: String,
+        existingImages: List<String>,
+        newImages: List<Uri>,
+        onDone: () -> Unit = {},
+    ) = viewModelScope.launch {
+        if (existingImages.size + newImages.size > 9) {
+            _state.update { it.copy(error = "最多保留 9 张图片") }
+            return@launch
+        }
+        _state.update { it.copy(updatingCheckin = true, error = null) }
+        runCatching {
+            val uploaded = newImages.map { uri ->
+                val compressor = imageCompressor ?: error("当前无法编辑打卡图片")
+                val image = withContext(Dispatchers.IO) { compressor.prepareForUpload(uri) }
+                try {
+                    repository.uploadImage(image.file, image.mediaType)
+                } finally {
+                    withContext(Dispatchers.IO) { image.file.delete() }
+                }
+            }
+            repository.updateCheckin(id, pointId, PointPatchIn(
+                point_name = name.trim(),
+                point_desc = desc.trim(),
+                point_img_url = existingImages + uploaded,
+            ))
+        }.onSuccess { updated ->
+            _state.update { old ->
+                val points = old.points.map { if (it.point_id == updated.point_id) updated else it }
+                old.copy(points = points, days = DayGrouper.group(points.mapNotNull(PointDto::toLite)),
+                    updatingCheckin = false)
+            }
+            onDone()
+        }.onFailure { error ->
+            _state.update { it.copy(updatingCheckin = false, error = error.message ?: "打卡更新失败") }
         }
     }
     fun delete() = viewModelScope.launch {

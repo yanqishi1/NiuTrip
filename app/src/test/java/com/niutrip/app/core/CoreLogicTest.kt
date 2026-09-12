@@ -33,14 +33,14 @@ class CoreLogicTest {
         assertEquals("end", endpoints?.end?.id)
     }
 
-    @Test fun `stationary drift is removed while route movement remains`() {
+    @Test fun `route path keeps every visible point in chronological order`() {
         val base = LocalDateTime.parse("2026-09-05T08:00:00")
         val points = listOf(
-            PointLite("a", base, 116.0, 39.0, false),
-            PointLite("jitter", base.plusMinutes(10), 116.00005, 39.00005, false),
-            PointLite("moved", base.plusMinutes(20), 116.001, 39.001, false),
             PointLite("end", base.plusMinutes(30), 116.00105, 39.00105, false),
+            PointLite("a", base, 116.0, 39.0, false),
+            PointLite("moved", base.plusMinutes(20), 116.001, 39.001, false),
+            PointLite("nearby", base.plusMinutes(10), 116.00005, 39.00005, false),
         )
-        assertEquals(listOf("a", "moved", "end"), RouteGeometry.suppressStationaryDrift(points).map { it.id })
+        assertEquals(listOf("a", "nearby", "moved", "end"), RouteGeometry.orderedPath(points).map { it.id })
     }
 }
