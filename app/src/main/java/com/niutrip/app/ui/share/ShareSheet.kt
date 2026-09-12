@@ -30,7 +30,7 @@ private data class ShareModeOption(val id: String, val title: String, val detail
     ModalBottomSheet(onDismissRequest = onDismiss, dragHandle = { BottomSheetDefaults.DragHandle() }) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("分享轨迹", style = MaterialTheme.typography.titleLarge)
-            Text("切换模式会生成新链接，旧链接立即失效", color = Muted, style = MaterialTheme.typography.bodySmall)
+            Text("公开链接生成一次即可反复分享（重复生成返回同一条）；切换分享模式会使旧链接失效", color = Muted, style = MaterialTheme.typography.bodySmall)
             options.forEach { option ->
                 Row(Modifier.fillMaxWidth().clickable { viewModel.pick(option.id) }.background(if (state.selectedMode == option.id) Color(0xFFF2FCF7) else Color.White, RoundedCornerShape(8.dp))
                     .border(1.dp, if (state.selectedMode == option.id) Green500 else Line, RoundedCornerShape(8.dp)).padding(12.dp)) {
