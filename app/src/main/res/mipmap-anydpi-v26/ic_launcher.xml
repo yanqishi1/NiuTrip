@@ -1,9 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 自适应图标：背景层铺满插画（遮罩只露出中心内容，圆角透明边被裁掉）。
-     注意：位图必须用独立名字 ic_launcher_square —— 若引用 @mipmap/ic_launcher
-     会解析回本 XML 自身形成死循环，启动器加载失败退回系统默认图标。
-     旧式 PNG 单独作 icon 时启动器会缩图垫白底，产生白圈。 -->
+<!-- 自适应图标使用 108dp 前景层；白色背景负责填充启动器的任意形状遮罩。 -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@mipmap/ic_launcher_square" />
+    <background android:drawable="@android:color/white" />
     <foreground android:drawable="@mipmap/ic_launcher_square" />
 </adaptive-icon>
