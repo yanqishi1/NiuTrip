@@ -21,6 +21,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.niutrip.app.core.dayColor
+import com.niutrip.app.core.RouteGeometry
+import com.niutrip.app.core.formatDistance
 import com.niutrip.app.ui.common.GonePage
 import com.niutrip.app.ui.common.LoadingOrError
 import com.niutrip.app.ui.detail.map.AMapView
@@ -77,6 +79,17 @@ import com.niutrip.app.ui.theme.*
             }
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.White, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)).padding(16.dp)) {
                 if (state.data?.track?.share_mode == "ONCE") Text("这是一次性分享，内容已保存到你的列表", color = Warning, style = MaterialTheme.typography.bodySmall)
+                Row(
+                    Modifier.fillMaxWidth().background(Color(0xFFF0F8F3), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("总里程", color = Muted, style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.weight(1f))
+                    Text(formatDistance(RouteGeometry.totalDistanceMeters(state.days.flatMap { it.points })),
+                        color = Green700, style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold)
+                }
                 Spacer(Modifier.height(8.dp)); LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     item { ShareDayChip("全程", state.selectedDay == -1, Green500) { viewModel.selectDay(-1) } }
                     itemsIndexed(state.days) { index, day -> ShareDayChip(day.date.toString().substring(5), state.selectedDay == index, Color(dayColor(index))) { viewModel.selectDay(index) } }

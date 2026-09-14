@@ -168,7 +168,7 @@ import coil.request.SuccessResult
                         .icon(BitmapDescriptorFactory.fromBitmap(icon))
                         .anchor(.5f, 1f))
                     pointLookup[marker.id] = point
-                } else if (!point.isCheckin) {
+                } else if (!point.isCheckin && markerPresentation.showAutoPoints) {
                     // 自动轨迹点：白底彩边圆圈（与 Web 分享页 CircleMarker 一致）
                     val dayColorInt = dayColor(index).toInt()
                     map.addMarker(MarkerOptions().position(position)
@@ -257,6 +257,7 @@ internal enum class CheckinMarkerStyle { HIDDEN, COMPACT, CARD }
 internal enum class EndpointMarkerStyle { COMPACT, SIGN }
 
 internal data class MarkerPresentation(
+    val showAutoPoints: Boolean,
     val checkinStyle: CheckinMarkerStyle,
     val endpointStyle: EndpointMarkerStyle,
     val checkinScale: Float,
@@ -267,15 +268,15 @@ internal data class MarkerPresentation(
 
 internal fun markerPresentationForZoom(zoom: Float): MarkerPresentation = when {
     zoom < 10f -> MarkerPresentation(
-        CheckinMarkerStyle.HIDDEN, EndpointMarkerStyle.COMPACT, .5f, .5f, 0f, 0f)
+        false, CheckinMarkerStyle.COMPACT, EndpointMarkerStyle.COMPACT, .5f, .5f, 38f, 38f)
     zoom < 12f -> MarkerPresentation(
-        CheckinMarkerStyle.COMPACT, EndpointMarkerStyle.COMPACT, .5f, .5f, 30f, 30f)
+        false, CheckinMarkerStyle.COMPACT, EndpointMarkerStyle.COMPACT, .5f, .5f, 30f, 30f)
     zoom < 14f -> MarkerPresentation(
-        CheckinMarkerStyle.CARD, EndpointMarkerStyle.SIGN, .7f, .7f, 82f, 72f)
+        false, CheckinMarkerStyle.CARD, EndpointMarkerStyle.SIGN, .7f, .7f, 82f, 72f)
     zoom < 16f -> MarkerPresentation(
-        CheckinMarkerStyle.CARD, EndpointMarkerStyle.SIGN, .85f, .85f, 100f, 86f)
+        true, CheckinMarkerStyle.CARD, EndpointMarkerStyle.SIGN, .85f, .85f, 100f, 86f)
     else -> MarkerPresentation(
-        CheckinMarkerStyle.CARD, EndpointMarkerStyle.SIGN, 1f, 1f, 116f, 100f)
+        true, CheckinMarkerStyle.CARD, EndpointMarkerStyle.SIGN, 1f, 1f, 116f, 100f)
 }
 
 internal data class MarkerScreenPoint(val x: Int, val y: Int)

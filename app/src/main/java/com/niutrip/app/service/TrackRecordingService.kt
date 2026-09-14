@@ -43,13 +43,8 @@ class TrackRecordingService : Service() {
                 afterCollect = { container.syncRepository.flushOnce() },
                 onPointStored = { location ->
                     saveLastPoint(trackId, location)
-                    container.syncRepository.notifyPointRecorded(
-                        trackId = trackId,
-                        lon = location.lon,
-                        lat = location.lat,
-                        timeMillis = location.timeMillis,
-                    )
                 },
+                onPendingPointStored = container.syncRepository::notifyPointRecorded,
                 onStateChanged = { saveMotionState(trackId, it) },
                 initialPoint = lastPoint(trackId),
                 initialState = lastMotionState(trackId))

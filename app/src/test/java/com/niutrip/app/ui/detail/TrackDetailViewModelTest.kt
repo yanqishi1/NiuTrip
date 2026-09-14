@@ -162,11 +162,15 @@ class TrackDetailViewModelTest {
         assertEquals(2, vm.state.value.points.size)  // 刷新完成后看到新点
     }
 
-    @Test fun `uploaded point event for this track reloads detail live`() = runTest {
+    @Test fun `pending points render locally and upload does not reload cloud points`() = runTest {
         val points = mutableListOf(pointDto("p1"))
+        var pointLoads = 0
         val api = object : StubApi() {
             override suspend fun track(id: String, recordView: Boolean) = trackDto()
-            override suspend fun points(id: String, page: Int) = PointsPage(points.size, null, null, points.toList())
+            override suspend fun points(id: String, page: Int): PointsPage {
+                pointLoads++
+                return PointsPage(points.size, null, null, points.toList())
+            }
             override suspend fun postPoints(id: String, body: PointsIn) = PostPointsOut(body.points.size)
         }
         val sync = SyncRepository(api, FakePendingPointDao(listOf(
@@ -175,10 +179,10 @@ class TrackDetailViewModelTest {
         val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao), LocationSource { LocResult.Failure("x") },
             sync, ImagePreparer { error("unused") })
         vm.load()
-        assertEquals(1, vm.state.value.points.size)
-        points += pointDto("p3")                     // 服务器即将多一个点
-        sync.flushOnce()                             // 队列把 t1 的点传上去 → 发事件
-        assertEquals(2, vm.state.value.points.size)  // 详情页原地刷新，无需退出重进
+        assertEquals(setOf("p1", "p2"), vm.state.value.points.map { it.point_id }.toSet())
+        sync.flushOnce()
+        assertEquals(1, pointLoads)
+        assertEquals(setOf("p1", "p2"), vm.state.value.points.map { it.point_id }.toSet())
     }
 
     @Test fun `locally recorded point moves current marker before upload`() = runTest {
@@ -187,7 +191,9 @@ class TrackDetailViewModelTest {
         val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao),
             LocationSource { LocResult.Failure("unused") }, sync, ImagePreparer { error("unused") })
 
-        sync.notifyPointRecorded("t1", 116.397, 39.908, 1_700_000_001_000)
+        sync.notifyPointRecorded(PendingPointEntity(trackId = "t1", pointId = "local1",
+            lon = 116.397, lat = 39.908, time = 1_700_000_001_000,
+            source = "AUTO", createdAt = 0))
 
         assertEquals(116.397, vm.state.value.current?.lon ?: 0.0, 1e-9)
         assertEquals(39.908, vm.state.value.current?.lat ?: 0.0, 1e-9)
@@ -200,9 +206,30 @@ class TrackDetailViewModelTest {
         val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao),
             LocationSource { LocResult.Failure("unused") }, sync, ImagePreparer { error("unused") })
 
-        sync.notifyPointRecorded("t2", 116.397, 39.908, 1_700_000_001_000)
+        sync.notifyPointRecorded(PendingPointEntity(trackId = "t2", pointId = "local2",
+            lon = 116.397, lat = 39.908, time = 1_700_000_001_000,
+            source = "AUTO", createdAt = 0))
 
         assertNull(vm.state.value.current)
+    }
+
+    @Test fun `location button stores a point locally while recording`() = runTest {
+        val dao = FakePendingPointDao()
+        val api = object : StubApi() {
+            override suspend fun track(id: String, recordView: Boolean) = trackDto()
+            override suspend fun points(id: String, page: Int) = PointsPage(0, null, null, emptyList())
+            override suspend fun postPoints(id: String, body: PointsIn): PostPointsOut = error("offline")
+        }
+        val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao),
+            LocationSource { LocResult.Success(116.397, 39.908, 1_700_000_001_000) },
+            SyncRepository(api, dao), ImagePreparer { error("unused") })
+
+        vm.load()
+        vm.focusCurrentLocation()
+
+        assertEquals(1, dao.rows.size)
+        assertEquals(1, vm.state.value.points.size)
+        assertEquals(116.397, vm.state.value.points.single().longitude ?: 0.0, 1e-9)
     }
 
     @Test fun `start conflict surfaces error and dismiss clears it`() = runTest {

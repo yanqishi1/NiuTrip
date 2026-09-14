@@ -23,6 +23,7 @@ class Recorder(
     private val clock: () -> Long = System::currentTimeMillis,
     private val afterCollect: suspend () -> Unit = {},
     private val onPointStored: (LocResult.Success) -> Unit = {},
+    private val onPendingPointStored: (PendingPointEntity) -> Unit = {},
     private val onStateChanged: (MotionState) -> Unit = {},
     initialPoint: LocResult.Success? = null,
     private val initialState: MotionState = MotionState.WARMUP,
@@ -107,8 +108,10 @@ class Recorder(
 
     private suspend fun store(trackId: String, location: LocResult.Success) {
         val time = if (location.timeMillis > 0) location.timeMillis else clock()
-        dao.insert(PendingPointEntity(trackId = trackId, pointId = businessId(), lon = location.lon,
-            lat = location.lat, time = time, source = "AUTO", createdAt = clock()))
+        val point = PendingPointEntity(trackId = trackId, pointId = businessId(), lon = location.lon,
+            lat = location.lat, time = time, source = "AUTO", createdAt = clock())
+        dao.insert(point)
+        onPendingPointStored(point)
         onPointStored(if (location.timeMillis == time) location else location.copy(timeMillis = time))
     }
 

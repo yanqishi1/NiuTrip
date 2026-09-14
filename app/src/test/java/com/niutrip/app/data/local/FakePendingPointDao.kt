@@ -6,6 +6,7 @@ open class FakePendingPointDao(initial: List<PendingPointEntity> = emptyList()) 
     var totalInserted = 0
     override suspend fun insert(entity: PendingPointEntity): Long { rows.add(entity); totalInserted++; return entity.id }
     override suspend fun takeFirst(count: Int): List<PendingPointEntity> = rows.sortedBy { it.time }.take(count)
+    override suspend fun forTrack(trackId: String): List<PendingPointEntity> = rows.filter { it.trackId == trackId }.sortedBy { it.time }
     override suspend fun deleteAll(ids: List<Long>) { rows.removeAll { it.id in ids } }
     override suspend fun count(trackId: String?): Int = rows.size
 }

@@ -8,7 +8,9 @@ import com.niutrip.app.data.remote.PointDto
 import com.niutrip.app.data.remote.PointPatchIn
 import com.niutrip.app.data.remote.TrackDto
 import com.niutrip.app.data.remote.TrackPatchIn
+import com.niutrip.app.data.local.PendingPointEntity
 import com.niutrip.app.data.repo.SyncRepository
+import com.niutrip.app.data.repo.RecordedTrackPoint
 import com.niutrip.app.data.repo.TrackRepository
 import com.niutrip.app.service.LocResult
 import com.niutrip.app.service.LocationSource
@@ -25,6 +27,7 @@ data class DetailState(
     val track: TrackDto? = null,
     val days: List<DayGroup> = emptyList(),
     val points: List<PointDto> = emptyList(),
+    val totalDistanceMeters: Double = 0.0,
     val selectedDay: Int = -1,
     val error: String? = null,
     val deleted: Boolean = false,
@@ -39,7 +42,7 @@ class TrackDetailViewModel(
     private val id: String,
     private val repository: TrackRepository,
     private val locationSource: LocationSource,
-    syncRepository: SyncRepository,
+    private val syncRepository: SyncRepository,
     private val imagePreparer: ImagePreparer,
     private val recordSharedView: Boolean = false,
 ) : ViewModel() {
@@ -47,14 +50,10 @@ class TrackDetailViewModel(
     private var viewRequestSent = false
 
     init {
-        // 本轨迹的点刚被上传（开始记录首点/自动采集/离线补传）→ 原地刷新，用户无需退出重进
-        viewModelScope.launch {
-            syncRepository.uploads.collect { (trackId, _) -> if (trackId == id) load() }
-        }
-        // 本地写入成功即移动当前位置图标；不增加 focus request，避免采集时强制移动地图视角
+        // 本地入库即更新地图和里程；上传成功后不再整页回拉云端点。
         viewModelScope.launch {
             syncRepository.recordedPoints.collect { point ->
-                if (point.trackId == id) updateCurrent(point.lon, point.lat, point.timeMillis)
+                if (point.trackId == id) addLocalPoint(point)
             }
         }
     }
@@ -71,7 +70,7 @@ class TrackDetailViewModel(
         try {
             val track = repository.detail(id, recordView = shouldRecordView)
             detailLoaded = true
-            val points = repository.points(id)
+            val points = mergeTrackPoints(repository.points(id), syncRepository.localPoints(id))
             val litePoints = points.mapNotNull(PointDto::toLite)
             val recordedFallback = if (track.track_status == "RECORDING" && track.track_record_mode == "AUTO") {
                 litePoints.maxByOrNull(PointLite::time)?.copy(id = "current")
@@ -81,7 +80,8 @@ class TrackDetailViewModel(
                     old.current == null || fallback.time.isAfter(old.current.time)
                 } ?: old.current
                 old.copy(loading = false, error = null, track = track,
-                    days = DayGrouper.group(litePoints), points = points, current = current)
+                    days = DayGrouper.group(litePoints), points = points,
+                    totalDistanceMeters = RouteGeometry.totalDistanceMeters(litePoints), current = current)
             }
             if (points.isEmpty() && _state.value.current == null) locateCurrent(focus = true, showError = false)
         } catch (error: Throwable) {
@@ -90,7 +90,20 @@ class TrackDetailViewModel(
         }
     }
 
-    fun focusCurrentLocation() = locateCurrent(focus = true, showError = true)
+    fun focusCurrentLocation() = locateCurrent(focus = true, showError = true, recordPoint = true)
+
+    private fun addLocalPoint(point: RecordedTrackPoint) {
+        updateCurrent(point.lon, point.lat, point.timeMillis)
+        _state.update { old ->
+            val points = mergePointDtos(old.points, listOf(point.toPointDto()))
+            val litePoints = points.mapNotNull(PointDto::toLite)
+            old.copy(
+                points = points,
+                days = DayGrouper.group(litePoints),
+                totalDistanceMeters = RouteGeometry.totalDistanceMeters(litePoints),
+            )
+        }
+    }
 
     private fun updateCurrent(lon: Double, lat: Double, timeMillis: Long) {
         val time = (if (timeMillis > 0) timeMillis else System.currentTimeMillis()).toBeijingDateTime()
@@ -100,7 +113,11 @@ class TrackDetailViewModel(
         }
     }
 
-    private fun locateCurrent(focus: Boolean, showError: Boolean) = viewModelScope.launch {
+    private fun locateCurrent(
+        focus: Boolean,
+        showError: Boolean,
+        recordPoint: Boolean = false,
+    ) = viewModelScope.launch {
         _state.update { it.copy(locatingCurrent = true) }
         when (val location = locationSource.singleShot()) {
             is LocResult.Success -> {
@@ -109,6 +126,15 @@ class TrackDetailViewModel(
                     location.lon, location.lat, false, null, null, emptyList()),
                     locatingCurrent = false,
                     currentFocusRequest = if (focus) it.currentFocusRequest + 1 else it.currentFocusRequest) }
+                if (recordPoint && !recordSharedView && _state.value.track?.track_status == "RECORDING") {
+                    runCatching {
+                        syncRepository.enqueueAutoPoint(id, location.lon, location.lat, time)
+                    }.onSuccess {
+                        viewModelScope.launch { syncRepository.flushOnce() }
+                    }.onFailure { error ->
+                        _state.update { it.copy(error = error.message ?: "轨迹点保存失败") }
+                    }
+                }
             }
             is LocResult.Failure -> _state.update {
                 it.copy(locatingCurrent = false,
@@ -185,3 +211,30 @@ class TrackDetailViewModel(
             .onFailure { error -> _state.update { it.copy(error = error.message) } }
     }
 }
+
+internal fun mergeTrackPoints(
+    cloud: List<PointDto>,
+    local: List<PendingPointEntity>,
+): List<PointDto> = mergePointDtos(cloud, local.map(PendingPointEntity::toPointDto))
+
+private fun mergePointDtos(base: List<PointDto>, additions: List<PointDto>): List<PointDto> =
+    (base + additions).associateBy(PointDto::point_id).values
+        .sortedBy { it.point_time }
+
+private fun PendingPointEntity.toPointDto() = PointDto(
+    point_id = pointId,
+    longitude = lon,
+    latitude = lat,
+    point_name = name,
+    point_desc = desc,
+    point_time = time.toBeijingDateTime().toApiTime(),
+    point_source = source,
+)
+
+private fun RecordedTrackPoint.toPointDto() = PointDto(
+    point_id = pointId,
+    longitude = lon,
+    latitude = lat,
+    point_time = timeMillis.toBeijingDateTime().toApiTime(),
+    point_source = "AUTO",
+)

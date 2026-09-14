@@ -20,4 +20,10 @@ object RouteGeometry {
         val a = sin(dLat / 2).pow(2) + cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLon / 2).pow(2)
         return 2 * EARTH_RADIUS_METERS * asin(sqrt(a.coerceIn(0.0, 1.0)))
     }
+
+    fun totalDistanceMeters(points: List<PointLite>): Double = orderedPath(points)
+        .zipWithNext { first, second ->
+            distanceMeters(first.lat, first.lon, second.lat, second.lon)
+        }
+        .sum()
 }

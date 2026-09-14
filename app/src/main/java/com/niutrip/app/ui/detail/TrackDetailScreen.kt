@@ -30,6 +30,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.niutrip.app.core.asTrackStatus
 import com.niutrip.app.core.dayColor
 import com.niutrip.app.core.TrackStateMachine
+import com.niutrip.app.core.formatDistance
 import com.niutrip.app.ui.common.LoadingOrError
 import com.niutrip.app.ui.common.CameraImage
 import com.niutrip.app.ui.common.ImageSourceSheet
@@ -141,7 +142,8 @@ import com.niutrip.app.ui.theme.*
                 contentColor = Green700,
             ) {
                 if (state.locatingCurrent) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                else Icon(Icons.Default.MyLocation, "跳转到当前位置")
+                else Icon(Icons.Default.MyLocation,
+                    if (backgroundRecording) "定位并记录轨迹点" else "跳转到当前位置")
             }
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.White, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)).padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -151,13 +153,24 @@ import com.niutrip.app.ui.theme.*
                     if (state.updatingImage) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
                 }
                 Spacer(Modifier.height(10.dp))
+                Row(
+                    Modifier.fillMaxWidth().background(Color(0xFFF0F8F3), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("总里程", color = Muted, style = MaterialTheme.typography.bodySmall)
+                    Spacer(Modifier.weight(1f))
+                    Text(formatDistance(state.totalDistanceMeters), color = Green700,
+                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.height(10.dp))
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     item { DayChip("全程", state.selectedDay == -1, Green500) { viewModel.selectDay(-1) } }
                     itemsIndexed(state.days) { index, day -> DayChip(day.date.toString().substring(5), state.selectedDay == index, Color(dayColor(index))) { viewModel.selectDay(index) } }
                 }
                 Spacer(Modifier.height(12.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-                    Stat("${state.track?.point_count ?: 0}", "轨迹点"); Stat("${state.track?.checkin_count ?: 0}", "打卡"); Stat("${state.days.size}", "天数")
+                    Stat("${state.points.size}", "轨迹点"); Stat("${state.points.count { it.point_source == "MANUAL" }}", "打卡"); Stat("${state.days.size}", "天数")
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {

@@ -24,4 +24,12 @@ class PendingPointDaoTest {
         db.pendingPointDao().deleteAll(first.map { it.id })
         assertEquals(1, db.pendingPointDao().count())
     }
+
+    @Test fun `reads only local points for the requested track`() = runBlocking {
+        db.pendingPointDao().insert(row(200, "b"))
+        db.pendingPointDao().insert(row(100, "a"))
+        db.pendingPointDao().insert(row(50, "other").copy(trackId = "TK2"))
+
+        assertEquals(listOf("a", "b"), db.pendingPointDao().forTrack("TK1").map { it.pointId })
+    }
 }

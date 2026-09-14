@@ -11,12 +11,15 @@ class MarkerPresentationTest {
         val near = markerPresentationForZoom(14f)
         val street = markerPresentationForZoom(16f)
 
-        assertEquals(CheckinMarkerStyle.HIDDEN, far.checkinStyle)
+        assertEquals(CheckinMarkerStyle.COMPACT, far.checkinStyle)
         assertEquals(EndpointMarkerStyle.COMPACT, far.endpointStyle)
+        assertEquals(false, far.showAutoPoints)
         assertEquals(CheckinMarkerStyle.COMPACT, overview.checkinStyle)
         assertEquals(EndpointMarkerStyle.COMPACT, overview.endpointStyle)
+        assertEquals(false, medium.showAutoPoints)
         assertEquals(CheckinMarkerStyle.CARD, medium.checkinStyle)
         assertEquals(.7f, medium.checkinScale)
+        assertEquals(true, near.showAutoPoints)
         assertEquals(.85f, near.checkinScale)
         assertEquals(1f, street.checkinScale)
     }

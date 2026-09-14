@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.niutrip.app.ui.detail
 
 import android.net.Uri
@@ -9,6 +11,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -26,6 +30,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import com.niutrip.app.core.PointLite
 import com.niutrip.app.ui.common.CameraImage
@@ -52,6 +58,7 @@ fun CheckinDetailSheet(
     var existingImages by remember(point.id, point.images) { mutableStateOf(point.images) }
     var newImages by remember(point.id) { mutableStateOf(emptyList<Uri>()) }
     var pendingCameraImage by remember { mutableStateOf<CameraImage?>(null) }
+    var viewerStart by remember(point.id) { mutableStateOf<Int?>(null) }
     val photoCount = existingImages.size + newImages.size
     val gallery = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null && photoCount < MAX_CHECKIN_PHOTOS) newImages = (newImages + uri).distinct()
@@ -154,15 +161,18 @@ fun CheckinDetailSheet(
                 }
                 Text(point.desc?.takeIf(String::isNotBlank) ?: "暂无打卡内容", color = if (point.desc.isNullOrBlank()) Muted else LocalContentColor.current)
                 if (point.images.isNotEmpty()) {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        itemsIndexed(point.images, key = { index, image -> "$index:$image" }) { _, image ->
-                            CheckinPhoto(absoluteMediaUrl(image))
-                        }
-                    }
+                    CheckinPhotoGallery(point.images) { viewerStart = it }
                 }
             }
             Spacer(Modifier.height(8.dp))
         }
+    }
+    viewerStart?.let { start ->
+        FullScreenImageViewer(
+            images = point.images.map(::absoluteMediaUrl),
+            initialPage = start,
+            onDismiss = { viewerStart = null },
+        )
     }
 }
 
@@ -184,14 +194,89 @@ private fun EditablePhotos(
 }
 
 @Composable
-private fun CheckinPhoto(model: Any) {
-    AsyncImage(
-        model = model,
-        contentDescription = "打卡照片",
-        modifier = Modifier.size(148.dp).clip(RoundedCornerShape(8.dp))
-            .border(2.dp, Green700, RoundedCornerShape(8.dp)),
-        contentScale = ContentScale.Crop,
+private fun CheckinPhotoGallery(images: List<String>, onOpen: (Int) -> Unit) {
+    val pagerState = rememberPagerState(pageCount = images::size)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        HorizontalPager(
+            state = pagerState,
+            pageSpacing = 10.dp,
+            modifier = Modifier.fillMaxWidth().height(210.dp),
+        ) { index ->
+            AsyncImage(
+                model = absoluteMediaUrl(images[index]),
+                contentDescription = "打卡照片 ${index + 1}",
+                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(8.dp))
+                    .border(1.dp, Line, RoundedCornerShape(8.dp))
+                    .clickable { onOpen(index) },
+                contentScale = ContentScale.Crop,
+            )
+        }
+        PhotoPageIndicator(pagerState.currentPage, images.size, Green700)
+    }
+}
+
+@Composable
+private fun FullScreenImageViewer(
+    images: List<String>,
+    initialPage: Int,
+    onDismiss: () -> Unit,
+) {
+    val pagerState = rememberPagerState(
+        initialPage = initialPage.coerceIn(0, images.lastIndex),
+        pageCount = images::size,
     )
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { index ->
+                AsyncImage(
+                    model = images[index],
+                    contentDescription = "大图 ${index + 1}",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                )
+            }
+            FilledTonalIconButton(
+                onClick = onDismiss,
+                modifier = Modifier.align(Alignment.TopEnd).statusBarsPadding().padding(16.dp),
+                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                    containerColor = Color.Black.copy(alpha = .55f),
+                    contentColor = Color.White,
+                ),
+            ) { Icon(Icons.Default.Close, "关闭大图") }
+            Surface(
+                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(20.dp),
+                color = Color.Black.copy(alpha = .55f),
+                shape = RoundedCornerShape(50),
+            ) {
+                Text(
+                    "${pagerState.currentPage + 1} / ${images.size}",
+                    color = Color.White,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PhotoPageIndicator(current: Int, count: Int, activeColor: Color) {
+    if (count <= 1) return
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        repeat(count) { index ->
+            Box(
+                Modifier.padding(horizontal = 3.dp).height(4.dp)
+                    .width(if (index == current) 20.dp else 7.dp)
+                    .background(if (index == current) activeColor else Line, RoundedCornerShape(50)),
+            )
+        }
+    }
 }
 
 @Composable
