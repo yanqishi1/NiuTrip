@@ -29,9 +29,10 @@ class ShareViewModelTest {
         val url = "https://niutrip.gyberpunk123.asia/t/tok123/"
         assertEquals(
             listOf(
-                "【NiuTrip 旅行轨迹分享】",
+                "【旅行牛牛 旅行轨迹分享】",
                 url,
-                "复制这条消息，打开 NiuTrip App 即可查看并保存这条轨迹",
+                "点击这个链接，打开网页可以直接查看轨迹。",
+                "复制这条消息，打开旅行牛牛 App 即可查看并保存这条轨迹",
             ),
             buildShareText(url).lines(),
         )

@@ -55,7 +55,7 @@ class TrackDetailViewModelTest {
 
     private fun vm(points: List<PointDto>, source: LocationSource, api: StubApi? = null): TrackDetailViewModel {
         val resolved = api ?: object : StubApi() {
-            override suspend fun track(id: String) = trackDto()
+            override suspend fun track(id: String, recordView: Boolean) = trackDto()
             override suspend fun points(id: String, page: Int) = PointsPage(points.size, null, null, points)
         }
         return TrackDetailViewModel("t1", TrackRepository(resolved, FakeDao), source,
@@ -73,6 +73,31 @@ class TrackDetailViewModelTest {
         val vm = vm(points = emptyList(), source = { LocResult.Failure("authfail") })
         vm.load()
         assertNull(vm.state.value.current)
+    }
+
+    @Test fun `shared detail records view only on first load`() = runTest {
+        val flags = mutableListOf<Boolean>()
+        val api = object : StubApi() {
+            override suspend fun track(id: String, recordView: Boolean): TrackDto {
+                flags += recordView
+                return trackDto()
+            }
+            override suspend fun points(id: String, page: Int) =
+                PointsPage(0, null, null, emptyList())
+        }
+        val vm = TrackDetailViewModel(
+            "t1",
+            TrackRepository(api, FakeDao),
+            LocationSource { LocResult.Failure("unused") },
+            SyncRepository(api, FakePendingPointDao()),
+            ImagePreparer { error("unused") },
+            recordSharedView = true,
+        )
+
+        vm.load()
+        vm.load()
+
+        assertEquals(listOf(true, false), flags)
     }
 
     @Test fun `recording track with points uses latest point as current fallback`() = runTest {
@@ -97,7 +122,7 @@ class TrackDetailViewModelTest {
     @Test fun `editing checkin updates point and regrouped map data`() = runTest {
         val original = pointDto("p1")
         val api = object : StubApi() {
-            override suspend fun track(id: String) = trackDto()
+            override suspend fun track(id: String, recordView: Boolean) = trackDto()
             override suspend fun points(id: String, page: Int) = PointsPage(1, null, null, listOf(original))
             override suspend fun patchPoint(trackId: String, pointId: String, body: PointPatchIn) =
                 original.copy(point_name = body.point_name, point_desc = body.point_desc,
@@ -118,7 +143,7 @@ class TrackDetailViewModelTest {
         val gate = CompletableDeferred<Unit>()
         var firstLoad = true
         val api = object : StubApi() {
-            override suspend fun track(id: String) = trackDto()
+            override suspend fun track(id: String, recordView: Boolean) = trackDto()
             override suspend fun points(id: String, page: Int): PointsPage {
                 // 第一次加载立即返回；刷新挂起直到 gate 放行（模拟慢请求期间用户看到旧内容）
                 if (!firstLoad) gate.await()
@@ -140,7 +165,7 @@ class TrackDetailViewModelTest {
     @Test fun `uploaded point event for this track reloads detail live`() = runTest {
         val points = mutableListOf(pointDto("p1"))
         val api = object : StubApi() {
-            override suspend fun track(id: String) = trackDto()
+            override suspend fun track(id: String, recordView: Boolean) = trackDto()
             override suspend fun points(id: String, page: Int) = PointsPage(points.size, null, null, points.toList())
             override suspend fun postPoints(id: String, body: PointsIn) = PostPointsOut(body.points.size)
         }
@@ -182,7 +207,7 @@ class TrackDetailViewModelTest {
 
     @Test fun `start conflict surfaces error and dismiss clears it`() = runTest {
         val api = object : StubApi() {
-            override suspend fun track(id: String) = trackDto()
+            override suspend fun track(id: String, recordView: Boolean) = trackDto()
             override suspend fun points(id: String, page: Int) = PointsPage(0, null, null, emptyList())
             override suspend fun patchTrack(id: String, body: TrackPatchIn): TrackDto = throw ApiException(409, "已有正在记录的轨迹")
         }

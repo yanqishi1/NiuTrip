@@ -106,7 +106,9 @@ private data class Tab(val label: String, val route: String, val icon: ImageVect
                 val id = backStack.arguments?.getString("trackId").orEmpty()
                 val readOnly = backStack.arguments?.getBoolean("readOnly") ?: false
                 val vm: TrackDetailViewModel = viewModel(key = "detail-$id", factory = ViewModelFactory {
-                    TrackDetailViewModel(id, container.trackRepository, container.locationSource, container.syncRepository, ImageCompressor(nav.context))
+                    TrackDetailViewModel(id, container.trackRepository, container.locationSource,
+                        container.syncRepository, ImageCompressor(nav.context),
+                        recordSharedView = readOnly)
                 })
                 TrackDetailScreen(vm, readOnly, currentUserAvatarUrl, nav::popBackStack, { nav.navigate(Routes.checkin(it)) }, { shareTrackId = it },
                     { trackId, name, mode -> TrackRecordingService.start(nav.context, trackId, name, mode) }, { TrackRecordingService.stop(nav.context) })

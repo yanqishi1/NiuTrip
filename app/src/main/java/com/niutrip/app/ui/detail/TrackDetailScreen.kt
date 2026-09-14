@@ -159,6 +159,11 @@ import com.niutrip.app.ui.theme.*
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
                     Stat("${state.track?.point_count ?: 0}", "轨迹点"); Stat("${state.track?.checkin_count ?: 0}", "打卡"); Stat("${state.days.size}", "天数")
                 }
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
+                    Stat("${state.track?.view_count ?: 0}", "查看次数")
+                    Stat("${state.track?.viewer_count ?: 0}", "查看人数")
+                }
                 val track = state.track
                 if (!readOnly && track != null) {
                     Spacer(Modifier.height(14.dp)); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

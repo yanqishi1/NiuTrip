@@ -45,12 +45,12 @@ private data class ShareModeOption(val id: String, val title: String, val detail
                 // 生成即复制：无需用户二次点击复制按钮
                 LaunchedEffect(doneUrl) {
                     context.getSystemService(ClipboardManager::class.java)
-                        .setPrimaryClip(ClipData.newPlainText("NiuTrip 分享链接", buildShareText(doneUrl)))
+                        .setPrimaryClip(ClipData.newPlainText("旅行牛牛分享链接", buildShareText(doneUrl)))
                     Toast.makeText(context, "链接已复制", Toast.LENGTH_SHORT).show()
                 }
                 Text(buildShareText(doneUrl), Modifier.fillMaxWidth().background(Background, RoundedCornerShape(8.dp)).padding(12.dp), maxLines = 4, overflow = TextOverflow.Ellipsis)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton({ context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("NiuTrip 分享链接", buildShareText(doneUrl))) }, Modifier.weight(1f)) { Icon(Icons.Default.ContentCopy, null); Spacer(Modifier.width(6.dp)); Text("再次复制") }
+                    OutlinedButton({ context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("旅行牛牛分享链接", buildShareText(doneUrl))) }, Modifier.weight(1f)) { Icon(Icons.Default.ContentCopy, null); Spacer(Modifier.width(6.dp)); Text("再次复制") }
                     OutlinedButton({ context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, buildShareText(doneUrl)) }, "分享轨迹")) }, Modifier.weight(1f)) { Icon(Icons.Default.IosShare, null); Spacer(Modifier.width(6.dp)); Text("更多") }
                 }
             }

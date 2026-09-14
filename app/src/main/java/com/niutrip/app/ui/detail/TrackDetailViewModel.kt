@@ -41,8 +41,10 @@ class TrackDetailViewModel(
     private val locationSource: LocationSource,
     syncRepository: SyncRepository,
     private val imagePreparer: ImagePreparer,
+    private val recordSharedView: Boolean = false,
 ) : ViewModel() {
     private val _state = MutableStateFlow(DetailState()); val state = _state.asStateFlow()
+    private var viewRequestSent = false
 
     init {
         // 本轨迹的点刚被上传（开始记录首点/自动采集/离线补传）→ 原地刷新，用户无需退出重进
@@ -63,8 +65,13 @@ class TrackDetailViewModel(
     // 静默刷新：已有内容时不闪全屏 loading；失败时保留旧内容（只有首屏失败才显示错误页）
     fun load() = viewModelScope.launch {
         if (_state.value.track == null) _state.update { it.copy(loading = true, error = null) }
+        val shouldRecordView = recordSharedView && !viewRequestSent
+        if (shouldRecordView) viewRequestSent = true
+        var detailLoaded = false
         try {
-            val track = repository.detail(id); val points = repository.points(id)
+            val track = repository.detail(id, recordView = shouldRecordView)
+            detailLoaded = true
+            val points = repository.points(id)
             val litePoints = points.mapNotNull(PointDto::toLite)
             val recordedFallback = if (track.track_status == "RECORDING" && track.track_record_mode == "AUTO") {
                 litePoints.maxByOrNull(PointLite::time)?.copy(id = "current")
@@ -78,6 +85,7 @@ class TrackDetailViewModel(
             }
             if (points.isEmpty() && _state.value.current == null) locateCurrent(focus = true, showError = false)
         } catch (error: Throwable) {
+            if (shouldRecordView && !detailLoaded) viewRequestSent = false
             if (_state.value.track == null) _state.update { it.copy(loading = false, error = error.message ?: "加载失败") }
         }
     }

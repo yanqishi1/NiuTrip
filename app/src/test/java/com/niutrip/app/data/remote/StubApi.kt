@@ -15,7 +15,7 @@ open class StubApi : ApiService {
     override suspend fun upload(image: MultipartBody.Part): UploadOut = TODO()
     override suspend fun tracks(scope: String): List<TrackDto> = TODO()
     override suspend fun createTrack(body: TrackCreateIn): TrackDto = TODO()
-    override suspend fun track(id: String): TrackDto = TODO()
+    override suspend fun track(id: String, recordView: Boolean): TrackDto = TODO()
     override suspend fun patchTrack(id: String, body: TrackPatchIn): TrackDto = TODO()
     override suspend fun updateTrackCover(id: String, image: MultipartBody.Part): TrackDto = TODO()
     override suspend fun deleteTrack(id: String): Unit = TODO()

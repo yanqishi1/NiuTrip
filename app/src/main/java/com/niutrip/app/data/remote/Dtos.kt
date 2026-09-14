@@ -42,6 +42,8 @@ import kotlinx.serialization.Serializable
     val share_mode: String = "PRIVATE",
     val point_count: Int = 0,
     val checkin_count: Int = 0,
+    val view_count: Int = 0,
+    val viewer_count: Int = 0,
     val sharer_username: String? = null,
 )
 
@@ -100,7 +102,13 @@ import kotlinx.serialization.Serializable
     val owner_username: String,
     val share_mode: String,
 )
-@Serializable data class ShareStatsDto(val point_count: Int, val checkin_count: Int, val days: Int)
+@Serializable data class ShareStatsDto(
+    val point_count: Int,
+    val checkin_count: Int,
+    val days: Int,
+    val view_count: Int = 0,
+    val viewer_count: Int = 0,
+)
 @Serializable data class ShareDayDto(val date: String, val points: List<PointDto>)
 @Serializable data class ShareDataDto(
     val track: ShareTrackDto,

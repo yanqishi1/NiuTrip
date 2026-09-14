@@ -84,6 +84,10 @@ import com.niutrip.app.ui.theme.*
                 Spacer(Modifier.height(14.dp)); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
                     ShareStat(state.data?.stats?.point_count ?: 0, "轨迹点"); ShareStat(state.data?.stats?.checkin_count ?: 0, "打卡"); ShareStat(state.data?.stats?.days ?: 0, "天数")
                 }
+                Spacer(Modifier.height(8.dp)); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
+                    ShareStat(state.data?.stats?.view_count ?: 0, "查看次数")
+                    ShareStat(state.data?.stats?.viewer_count ?: 0, "查看人数")
+                }
             }
         }
     }

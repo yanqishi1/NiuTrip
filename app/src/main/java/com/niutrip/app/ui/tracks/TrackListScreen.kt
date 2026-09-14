@@ -237,6 +237,16 @@ private data class PendingDelete(val track: TrackDto, val shared: Boolean)
                 StatusPill("${track.point_count} 点", Muted)
                 if (track.checkin_count > 0) StatusPill("${track.checkin_count} 打卡", Warning)
             }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                Text("查看次数 ${track.view_count}", color = Muted,
+                    style = MaterialTheme.typography.labelSmall)
+                Box(Modifier.size(3.dp).background(Line, RoundedCornerShape(50)))
+                Text("查看人数 ${track.viewer_count}", color = Muted,
+                    style = MaterialTheme.typography.labelSmall)
+            }
         }
     }
 }

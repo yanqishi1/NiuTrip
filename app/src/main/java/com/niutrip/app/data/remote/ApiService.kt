@@ -15,7 +15,10 @@ interface ApiService {
     @Multipart @POST("upload/image") suspend fun upload(@Part image: MultipartBody.Part): UploadOut
     @GET("tracks/") suspend fun tracks(@Query("scope") scope: String = "mine"): List<TrackDto>
     @POST("tracks/") suspend fun createTrack(@Body body: TrackCreateIn): TrackDto
-    @GET("tracks/{trackId}/") suspend fun track(@Path("trackId") id: String): TrackDto
+    @GET("tracks/{trackId}/") suspend fun track(
+        @Path("trackId") id: String,
+        @Query("record_view") recordView: Boolean = false,
+    ): TrackDto
     @PATCH("tracks/{trackId}/") suspend fun patchTrack(@Path("trackId") id: String, @Body body: TrackPatchIn): TrackDto
     @Multipart @PUT("tracks/{trackId}/cover/") suspend fun updateTrackCover(@Path("trackId") id: String, @Part image: MultipartBody.Part): TrackDto
     @DELETE("tracks/{trackId}/") suspend fun deleteTrack(@Path("trackId") id: String)

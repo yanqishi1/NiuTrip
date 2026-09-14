@@ -28,7 +28,8 @@ class TrackRepository(private val api: ApiService, private val tracks: TrackDao)
 
     suspend fun create(name: String, mode: String) = apiCall { api.createTrack(TrackCreateIn(name.trim(), mode)) }
         .also { tracks.upsert(TrackEntity.from(it)) }
-    suspend fun detail(id: String) = apiCall { api.track(id) }
+    suspend fun detail(id: String, recordView: Boolean = false) =
+        apiCall { api.track(id, recordView) }
     suspend fun patch(id: String, body: TrackPatchIn) = apiCall { api.patchTrack(id, body) }
         .also { tracks.upsert(TrackEntity.from(it)) }
     suspend fun updateImage(id: String, file: File, mediaType: String): TrackDto {

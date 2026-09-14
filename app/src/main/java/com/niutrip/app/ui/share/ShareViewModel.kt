@@ -17,7 +17,7 @@ data class ShareState(val selectedMode: String = "PRIVATE", val result: ShareRes
 /** 分享文案（百度网盘式）：URL 原样独占一行（接收端 DeepLinkHandler 按空白截断提取、
  *  忽略其余说明文字），后附使用方式说明，引导接收方回到 App 打开。 */
 fun buildShareText(url: String): String =
-    "【NiuTrip 旅行轨迹分享】\n$url\n复制这条消息，打开 NiuTrip App 即可查看并保存这条轨迹"
+    "【旅行牛牛 旅行轨迹分享】\n$url\n点击这个链接，打开网页可以直接查看轨迹。\n复制这条消息，打开旅行牛牛 App 即可查看并保存这条轨迹"
 
 class ShareViewModel(private val trackId: String, private val api: ApiService) : ViewModel() {
     private val _state = MutableStateFlow(ShareState()); val state = _state.asStateFlow()
