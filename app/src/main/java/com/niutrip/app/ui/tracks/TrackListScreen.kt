@@ -30,6 +30,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.niutrip.app.data.remote.TrackDto
+import com.niutrip.app.service.TrackRecordingService
 import com.niutrip.app.ui.common.*
 import com.niutrip.app.ui.theme.*
 import kotlin.math.roundToInt
@@ -78,9 +79,13 @@ import kotlin.math.roundToInt
             else LazyColumn(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 2.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
                 items(rows, key = { it.track_id }) { track ->
                     val shared = state.selected == TrackScope.SHARED
+                    val paused = !shared && track.track_status == "RECORDING" &&
+                        track.track_record_mode == "AUTO" &&
+                        TrackRecordingService.isPaused(context, track.track_id)
                     SwipeRevealTrackCard(
                         track = track,
                         shared = shared,
+                        paused = paused,
                         revealed = revealedTrackId == track.track_id,
                         deleting = state.deletingTrackId == track.track_id,
                         onReveal = { reveal -> revealedTrackId = track.track_id.takeIf { reveal } },
@@ -166,6 +171,7 @@ private data class PendingDelete(val track: TrackDto, val shared: Boolean)
 @Composable private fun SwipeRevealTrackCard(
     track: TrackDto,
     shared: Boolean,
+    paused: Boolean,
     revealed: Boolean,
     deleting: Boolean,
     onReveal: (Boolean) -> Unit,
@@ -210,22 +216,30 @@ private data class PendingDelete(val track: TrackDto, val shared: Boolean)
                     )
                 },
         ) {
-            TrackCard(track, shared) {
+            TrackCard(track, shared, paused) {
                 if (revealed) onReveal(false) else onClick()
             }
         }
     }
 }
 
-@Composable private fun TrackCard(track: TrackDto, shared: Boolean, onClick: () -> Unit) {
+@Composable private fun TrackCard(track: TrackDto, shared: Boolean, paused: Boolean, onClick: () -> Unit) {
     val recording = track.track_status == "RECORDING"
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(if (recording) Color(0xFFF2FCF7) else Color.White)
-        .border(if (recording) 1.dp else 0.dp, if (recording) Color(0xFFB8EAD2) else Color.Transparent, RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(11.dp), horizontalArrangement = Arrangement.spacedBy(11.dp)) {
+    val activeColor = if (paused) Warning else Green700
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(when {
+        paused -> Color(0xFFFFF8E8)
+        recording -> Color(0xFFF2FCF7)
+        else -> Color.White
+    }).border(if (recording) 1.dp else 0.dp, when {
+        paused -> Warning.copy(alpha = .45f)
+        recording -> Color(0xFFB8EAD2)
+        else -> Color.Transparent
+    }, RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(11.dp), horizontalArrangement = Arrangement.spacedBy(11.dp)) {
         TrackCover(track.track_img_url, Modifier.size(86.dp), "${track.track_name}的代表图")
         Column(Modifier.weight(1f).heightIn(min = 86.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(track.track_name, Modifier.weight(1f), fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                StatusPill(when (track.track_status) { "RECORDING" -> "记录中"; "FINISHED" -> "已结束"; else -> "未开始" }, when (track.track_status) { "RECORDING" -> Green700; "FINISHED" -> Muted; else -> Warning })
+                StatusPill(when { paused -> "已暂停"; recording -> "记录中"; track.track_status == "FINISHED" -> "已结束"; else -> "未开始" }, when { recording -> activeColor; track.track_status == "FINISHED" -> Muted; else -> Warning })
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(track.track_start_time?.take(10) ?: "尚未开始记录", Modifier.weight(1f), color = Muted,
@@ -233,7 +247,7 @@ private data class PendingDelete(val track: TrackDto, val shared: Boolean)
                 if (shared) SharedSourcePill(track.sharer_username ?: "好友")
             }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                StatusPill(if (track.track_record_mode == "AUTO") "自动" else "仅手动", if (recording) Green700 else Muted)
+                StatusPill(if (track.track_record_mode == "AUTO") "自动" else "仅手动", if (recording) activeColor else Muted)
                 StatusPill("${track.point_count} 点", Muted)
                 if (track.checkin_count > 0) StatusPill("${track.checkin_count} 打卡", Warning)
             }

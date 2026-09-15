@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 
 data class DetailState(
     val loading: Boolean = true,
@@ -35,7 +37,7 @@ data class DetailState(
     val locatingCurrent: Boolean = false,
     val currentFocusRequest: Int = 0,
     val updatingImage: Boolean = false,
-    val updatingCheckin: Boolean = false,
+    val updatingPoint: Boolean = false,
 )
 
 class TrackDetailViewModel(
@@ -90,7 +92,8 @@ class TrackDetailViewModel(
         }
     }
 
-    fun focusCurrentLocation() = locateCurrent(focus = true, showError = true, recordPoint = true)
+    fun focusCurrentLocation(recordPoint: Boolean = true) =
+        locateCurrent(focus = true, showError = true, recordPoint = recordPoint)
 
     private fun addLocalPoint(point: RecordedTrackPoint) {
         updateCurrent(point.lon, point.lat, point.timeMillis)
@@ -168,19 +171,31 @@ class TrackDetailViewModel(
             _state.update { it.copy(updatingImage = false, error = error.message ?: "代表图更新失败") }
         }
     }
-    fun updateCheckin(
+    fun updatePoint(
         pointId: String,
+        wasCheckin: Boolean,
         name: String,
         desc: String,
+        longitude: Double,
+        latitude: Double,
         existingImages: List<String>,
         newImages: List<Uri>,
         onDone: () -> Unit = {},
     ) = viewModelScope.launch {
+        pointContentValidation(wasCheckin, name, desc, existingImages.size + newImages.size)?.let { message ->
+            _state.update { it.copy(error = message) }
+            return@launch
+        }
+        if (!longitude.isFinite() || longitude !in -180.0..180.0 ||
+            !latitude.isFinite() || latitude !in -90.0..90.0) {
+            _state.update { it.copy(error = "请输入有效的经纬度") }
+            return@launch
+        }
         if (existingImages.size + newImages.size > 9) {
             _state.update { it.copy(error = "最多保留 9 张图片") }
             return@launch
         }
-        _state.update { it.copy(updatingCheckin = true, error = null) }
+        _state.update { it.copy(updatingPoint = true, error = null) }
         runCatching {
             val uploaded = newImages.map { uri ->
                 val image = withContext(Dispatchers.IO) { imagePreparer.prepareForUpload(uri) }
@@ -190,20 +205,65 @@ class TrackDetailViewModel(
                     withContext(Dispatchers.IO) { image.file.delete() }
                 }
             }
-            repository.updateCheckin(id, pointId, PointPatchIn(
-                point_name = name.trim(),
-                point_desc = desc.trim(),
-                point_img_url = existingImages + uploaded,
-            ))
+            val normalizedName = name.trim().ifBlank { null }
+            val normalizedDesc = desc.trim().ifBlank { null }
+            val images = existingImages + uploaded
+            val source = if (normalizedName == null) "AUTO" else "MANUAL"
+            val localUpdated = syncRepository.updateLocalPoint(
+                pointId, longitude, latitude, normalizedName, normalizedDesc, images, source)
+            if (localUpdated) {
+                _state.value.points.first { it.point_id == pointId }.copy(
+                    point_longitude = null,
+                    point_latitude = null,
+                    longitude = longitude,
+                    latitude = latitude,
+                    point_name = normalizedName,
+                    point_desc = normalizedDesc,
+                    point_img_url = images,
+                    point_source = source,
+                ).also { viewModelScope.launch { syncRepository.flushOnce() } }
+            } else {
+                repository.updatePoint(id, pointId, PointPatchIn(
+                    longitude = longitude,
+                    latitude = latitude,
+                    point_name = normalizedName,
+                    point_desc = normalizedDesc,
+                    point_img_url = images,
+                ))
+            }
         }.onSuccess { updated ->
             _state.update { old ->
                 val points = old.points.map { if (it.point_id == updated.point_id) updated else it }
                 old.copy(points = points, days = DayGrouper.group(points.mapNotNull(PointDto::toLite)),
-                    updatingCheckin = false)
+                    totalDistanceMeters = RouteGeometry.totalDistanceMeters(points.mapNotNull(PointDto::toLite)),
+                    updatingPoint = false)
             }
             onDone()
         }.onFailure { error ->
-            _state.update { it.copy(updatingCheckin = false, error = error.message ?: "打卡更新失败") }
+            _state.update { it.copy(updatingPoint = false, error = error.message ?: "轨迹点更新失败") }
+        }
+    }
+
+    fun deletePoint(pointId: String, onDone: () -> Unit = {}) = viewModelScope.launch {
+        _state.update { it.copy(updatingPoint = true, error = null) }
+        runCatching {
+            if (!syncRepository.deleteLocalPoint(pointId)) repository.deletePoint(id, pointId)
+        }.onSuccess {
+            _state.update { old ->
+                val points = old.points.filterNot { it.point_id == pointId }
+                val litePoints = points.mapNotNull(PointDto::toLite)
+                val days = DayGrouper.group(litePoints)
+                old.copy(
+                    points = points,
+                    days = days,
+                    totalDistanceMeters = RouteGeometry.totalDistanceMeters(litePoints),
+                    selectedDay = old.selectedDay.takeIf { it in days.indices } ?: -1,
+                    updatingPoint = false,
+                )
+            }
+            onDone()
+        }.onFailure { error ->
+            _state.update { it.copy(updatingPoint = false, error = error.message ?: "轨迹点删除失败") }
         }
     }
     fun delete() = viewModelScope.launch {
@@ -227,6 +287,8 @@ private fun PendingPointEntity.toPointDto() = PointDto(
     latitude = lat,
     point_name = name,
     point_desc = desc,
+    point_img_url = runCatching { Json.decodeFromString<List<String>>(imgs) }
+        .getOrDefault(emptyList()),
     point_time = time.toBeijingDateTime().toApiTime(),
     point_source = source,
 )

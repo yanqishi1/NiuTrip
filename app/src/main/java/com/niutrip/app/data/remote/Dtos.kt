@@ -60,6 +60,8 @@ import kotlinx.serialization.Serializable
 @Serializable data class PointsIn(val points: List<PointIn>)
 @Serializable data class PostPointsOut(val count: Int)
 @Serializable data class PointPatchIn(
+    val longitude: Double,
+    val latitude: Double,
     val point_name: String? = null,
     val point_desc: String? = null,
     val point_img_url: List<String> = emptyList(),

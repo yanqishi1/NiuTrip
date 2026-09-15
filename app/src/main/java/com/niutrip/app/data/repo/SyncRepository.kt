@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 sealed interface FlushResult {
@@ -43,6 +44,31 @@ class SyncRepository(private val api: ApiService, private val dao: PendingPointD
     }
 
     suspend fun localPoints(trackId: String): List<PendingPointEntity> = dao.forTrack(trackId)
+
+    suspend fun updateLocalPoint(
+        pointId: String,
+        lon: Double,
+        lat: Double,
+        name: String?,
+        desc: String?,
+        images: List<String>,
+        source: String,
+    ): Boolean = mutex.withLock {
+        val existing = dao.get(pointId) ?: return@withLock false
+        dao.insert(existing.copy(
+            lon = lon,
+            lat = lat,
+            name = name,
+            desc = desc,
+            imgs = Json.encodeToString(images),
+            source = source,
+        ))
+        true
+    }
+
+    suspend fun deleteLocalPoint(pointId: String): Boolean = mutex.withLock {
+        dao.delete(pointId) > 0
+    }
 
     suspend fun enqueueAutoPoint(
         trackId: String,

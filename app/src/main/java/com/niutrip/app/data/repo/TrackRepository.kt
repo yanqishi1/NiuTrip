@@ -41,8 +41,10 @@ class TrackRepository(private val api: ApiService, private val tracks: TrackDao)
         val part = MultipartBody.Part.createFormData("image", file.name, file.asRequestBody(mediaType.toMediaType()))
         return apiCall { api.upload(part) }.url
     }
-    suspend fun updateCheckin(trackId: String, pointId: String, body: PointPatchIn): PointDto =
+    suspend fun updatePoint(trackId: String, pointId: String, body: PointPatchIn): PointDto =
         apiCall { api.patchPoint(trackId = trackId, pointId = pointId, body = body) }
+    suspend fun deletePoint(trackId: String, pointId: String) =
+        apiCall { api.deletePoint(trackId = trackId, pointId = pointId) }
     suspend fun delete(id: String) { apiCall { api.deleteTrack(id) }; refreshCacheWithout(id) }
     suspend fun deleteShared(id: String) { apiCall { api.deleteReceivedShare(id) } }
     suspend fun points(id: String): List<PointDto> {

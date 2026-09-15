@@ -32,4 +32,13 @@ class PendingPointDaoTest {
 
         assertEquals(listOf("a", "b"), db.pendingPointDao().forTrack("TK1").map { it.pointId })
     }
+
+    @Test fun `finds and deletes one pending point by business id`() = runBlocking {
+        db.pendingPointDao().insert(row(100, "keep"))
+        db.pendingPointDao().insert(row(200, "remove"))
+
+        assertEquals("remove", db.pendingPointDao().get("remove")?.pointId)
+        assertEquals(1, db.pendingPointDao().delete("remove"))
+        assertEquals(listOf("keep"), db.pendingPointDao().forTrack("TK1").map { it.pointId })
+    }
 }

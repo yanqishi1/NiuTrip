@@ -44,6 +44,7 @@ import coil.request.SuccessResult
     var visibleViewport by remember { mutableStateOf<MapViewport?>(null) }
     var markerPresentation by remember { mutableStateOf(markerPresentationForZoom(15f)) }
     val visibleDays = if (selectedDayIdx in days.indices) listOf(days[selectedDayIdx]) else days
+    val routePaths = visibleRoutePaths(days, selectedDayIdx)
     val thumbnailRequests = if (markerPresentation.checkinStyle == CheckinMarkerStyle.CARD) {
         visibleThumbnailRequests(
             points = visibleDays.flatMap(DayGroup::points),
@@ -146,11 +147,13 @@ import coil.request.SuccessResult
             minHorizontalPx = markerPresentation.minHorizontalSpacingDp * context.resources.displayMetrics.density,
             minVerticalPx = markerPresentation.minVerticalSpacingDp * context.resources.displayMetrics.density,
         ).mapTo(mutableSetOf()) { checkinCandidates[it].id }
+        routePaths.forEach { path ->
+            val points = path.points.map { LatLng(it.lat, it.lon) }
+            if (points.size >= 2) map.addPolyline(PolylineOptions().addAll(points).width(10f)
+                .color(dayColor(path.dayIndex).toInt()).geodesic(true))
+        }
         visibleDays.forEach { day ->
             val index = days.indexOf(day)
-            // The visible point markers and the polyline must use the same point set.
-            val points = RouteGeometry.orderedPath(day.points).map { LatLng(it.lat, it.lon) }
-            if (points.size >= 2) map.addPolyline(PolylineOptions().addAll(points).width(10f).color(dayColor(index).toInt()).geodesic(true))
             day.points.forEach pointLoop@ { point ->
                 val position = LatLng(point.lat, point.lon); bounds.include(position)
                 if (point.isCheckin && point.id in visibleCheckinIds) {
@@ -171,13 +174,14 @@ import coil.request.SuccessResult
                 } else if (!point.isCheckin && markerPresentation.showAutoPoints) {
                     // 自动轨迹点：白底彩边圆圈（与 Web 分享页 CircleMarker 一致）
                     val dayColorInt = dayColor(index).toInt()
-                    map.addMarker(MarkerOptions().position(position)
+                    val marker = map.addMarker(MarkerOptions().position(position)
                         .icon(BitmapDescriptorFactory.fromBitmap(
                             autoDotCache.getOrPut(dayColorInt) {
                                 createAutoPointDotBitmap(context, dayColorInt)
                             }))
                         .anchor(.5f, .5f)
                         .zIndex(1f))
+                    pointLookup[marker.id] = point
                 }
             }
         }
@@ -193,9 +197,7 @@ import coil.request.SuccessResult
                     .anchor(artwork.anchorU, artwork.anchorV)
                     .zIndex(6f),
             )
-            if (spec.point.isCheckin) {
-                pointLookup[marker.id] = spec.point
-            }
+            pointLookup[marker.id] = spec.point
         }
         latest?.takeIf { visibleDays.any { day -> day.points.any { point -> point.id == it.id } } }?.let {
             val position = LatLng(it.lat, it.lon)
@@ -230,7 +232,7 @@ import coil.request.SuccessResult
                 .icon(BitmapDescriptorFactory.fromBitmap(artwork.bitmap))
                 .anchor(artwork.anchorU, artwork.anchorV)
                 .zIndex(10f))
-            representedEndpointSpecs.firstOrNull { it.point.isCheckin }?.let {
+            representedEndpointSpecs.lastOrNull()?.let {
                 pointLookup[marker.id] = it.point
             }
             if (all.isEmpty() || focusCurrentRequest > cameraMemory.focusRequest) {
@@ -246,6 +248,22 @@ import coil.request.SuccessResult
 }
 
 private class MapCameraMemory(var viewportKey: String? = null, var focusRequest: Int = -1)
+
+internal data class RoutePath(val dayIndex: Int, val points: List<PointLite>)
+
+internal fun visibleRoutePaths(days: List<DayGroup>, selectedDayIdx: Int): List<RoutePath> {
+    if (selectedDayIdx in days.indices) {
+        return listOf(RoutePath(selectedDayIdx, RouteGeometry.orderedPath(days[selectedDayIdx].points)))
+    }
+    var previousEnd: PointLite? = null
+    return days.mapIndexedNotNull { index, day ->
+        val points = RouteGeometry.orderedPath(day.points)
+        if (points.isEmpty()) return@mapIndexedNotNull null
+        val connected = previousEnd?.let { listOf(it) + points } ?: points
+        previousEnd = points.last()
+        RoutePath(index, connected)
+    }
+}
 
 private data class EndpointSpec(
     val point: PointLite,

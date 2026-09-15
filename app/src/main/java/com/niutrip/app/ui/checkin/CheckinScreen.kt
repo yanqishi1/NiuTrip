@@ -59,7 +59,7 @@ import java.time.LocalDateTime
             }
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.LocationOn, null, tint = Green700); Spacer(Modifier.width(8.dp)); Text(if (state.lon == null) "正在获取当前位置" else "${"%.5f".format(state.lat)}, ${"%.5f".format(state.lon)}", color = Muted) }
-                OutlinedTextField(state.name, viewModel::setName, Modifier.fillMaxWidth(), label = { Text("点位名称") }, placeholder = { Text("例如：折多山垭口") }, singleLine = true, shape = RoundedCornerShape(12.dp))
+                OutlinedTextField(state.name, viewModel::setName, Modifier.fillMaxWidth(), label = { Text("点位名称（必填）") }, placeholder = { Text("例如：折多山垭口") }, singleLine = true, shape = RoundedCornerShape(12.dp))
                 OutlinedTextField(state.desc, viewModel::setDesc, Modifier.fillMaxWidth().heightIn(min = 110.dp), label = { Text("这一刻的想法") }, shape = RoundedCornerShape(12.dp))
                 Text("照片 ${state.photos.size}/9", fontWeight = FontWeight.Bold)
                 LazyVerticalGrid(GridCells.Fixed(3), Modifier.fillMaxWidth().height(((state.photos.size + 3) / 3 * 104).coerceAtLeast(104).dp), userScrollEnabled = false, horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

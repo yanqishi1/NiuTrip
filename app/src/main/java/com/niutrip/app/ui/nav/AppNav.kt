@@ -111,7 +111,10 @@ private data class Tab(val label: String, val route: String, val icon: ImageVect
                         recordSharedView = readOnly)
                 })
                 TrackDetailScreen(vm, readOnly, currentUserAvatarUrl, nav::popBackStack, { nav.navigate(Routes.checkin(it)) }, { shareTrackId = it },
-                    { trackId, name, mode -> TrackRecordingService.start(nav.context, trackId, name, mode) }, { TrackRecordingService.stop(nav.context) })
+                    { trackId, name, mode -> TrackRecordingService.start(nav.context, trackId, name, mode) },
+                    { trackId, name, mode -> TrackRecordingService.pause(nav.context, trackId, name, mode) },
+                    { trackId -> TrackRecordingService.isPaused(nav.context, trackId) },
+                    { TrackRecordingService.stop(nav.context) })
             }
             composable(Routes.CHECKIN) { backStack ->
                 val id = backStack.arguments?.getString("trackId").orEmpty()

@@ -26,6 +26,7 @@ interface ApiService {
     @POST("tracks/{trackId}/points/") suspend fun postPoints(@Path("trackId") id: String, @Body body: PointsIn): PostPointsOut
     @GET("tracks/{trackId}/points/") suspend fun points(@Path("trackId") id: String, @Query("page") page: Int = 1): PointsPage
     @PATCH("tracks/{trackId}/points/{pointId}/") suspend fun patchPoint(@Path("trackId") trackId: String, @Path("pointId") pointId: String, @Body body: PointPatchIn): PointDto
+    @DELETE("tracks/{trackId}/points/{pointId}/") suspend fun deletePoint(@Path("trackId") trackId: String, @Path("pointId") pointId: String)
     @POST("tracks/{trackId}/share/") suspend fun share(@Path("trackId") id: String, @Body body: ShareIn): ShareOut
     @DELETE("tracks/{trackId}/share/") suspend fun revokeShare(@Path("trackId") id: String): Response<Unit>
     @GET("share/{token}/inspect/") suspend fun inspectShare(@Path("token") token: String): ShareInspectOut

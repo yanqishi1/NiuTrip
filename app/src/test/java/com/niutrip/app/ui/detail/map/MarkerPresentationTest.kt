@@ -1,9 +1,16 @@
 package com.niutrip.app.ui.detail.map
 
+import com.niutrip.app.core.DayGroup
+import com.niutrip.app.core.PointLite
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import java.time.LocalDate
+import java.time.LocalDateTime
 
 class MarkerPresentationTest {
+    private fun point(id: String, dateTime: String) = PointLite(
+        id, LocalDateTime.parse(dateTime), 116.0, 39.0, false)
+
     @Test fun `zoom levels progressively reveal and enlarge markers`() {
         val far = markerPresentationForZoom(9.9f)
         val overview = markerPresentationForZoom(10f)
@@ -38,5 +45,33 @@ class MarkerPresentationTest {
         )
 
         assertEquals(listOf(0, 3), visible)
+    }
+
+    @Test fun `full route connects the end of one day to the start of the next`() {
+        val days = listOf(
+            DayGroup(LocalDate.parse("2026-09-14"), listOf(
+                point("d1-start", "2026-09-14T22:00:00"),
+                point("d1-end", "2026-09-14T23:50:00"),
+            )),
+            DayGroup(LocalDate.parse("2026-09-15"), listOf(
+                point("d2-start", "2026-09-15T08:00:00"),
+                point("d2-end", "2026-09-15T09:00:00"),
+            )),
+        )
+
+        val paths = visibleRoutePaths(days, -1)
+
+        assertEquals(listOf("d1-start", "d1-end"), paths[0].points.map { it.id })
+        assertEquals(listOf("d1-end", "d2-start", "d2-end"), paths[1].points.map { it.id })
+        assertEquals(1, paths[1].dayIndex)
+    }
+
+    @Test fun `single day route does not include the previous day bridge`() {
+        val days = listOf(
+            DayGroup(LocalDate.parse("2026-09-14"), listOf(point("d1", "2026-09-14T23:50:00"))),
+            DayGroup(LocalDate.parse("2026-09-15"), listOf(point("d2", "2026-09-15T08:00:00"))),
+        )
+
+        assertEquals(listOf("d2"), visibleRoutePaths(days, 1).single().points.map { it.id })
     }
 }

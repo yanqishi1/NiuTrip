@@ -17,8 +17,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -29,7 +31,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
@@ -41,6 +45,7 @@ import com.niutrip.app.ui.common.hasCamera
 import com.niutrip.app.ui.theme.Green700
 import com.niutrip.app.ui.theme.Line
 import com.niutrip.app.ui.theme.Muted
+import com.niutrip.app.ui.theme.Danger
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,17 +54,32 @@ fun CheckinDetailSheet(
     editable: Boolean,
     saving: Boolean,
     onDismiss: () -> Unit,
-    onSave: (name: String, desc: String, existingImages: List<String>, newImages: List<Uri>) -> Unit,
+    onSave: (name: String, desc: String, longitude: Double, latitude: Double,
+             existingImages: List<String>, newImages: List<Uri>) -> Unit,
+    onDelete: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     var editing by remember(point.id) { mutableStateOf(false) }
     var name by remember(point.id, point.name) { mutableStateOf(point.name.orEmpty()) }
     var desc by remember(point.id, point.desc) { mutableStateOf(point.desc.orEmpty()) }
+    var longitude by remember(point.id, point.lon) { mutableStateOf(point.lon.toString()) }
+    var latitude by remember(point.id, point.lat) { mutableStateOf(point.lat.toString()) }
     var existingImages by remember(point.id, point.images) { mutableStateOf(point.images) }
     var newImages by remember(point.id) { mutableStateOf(emptyList<Uri>()) }
     var pendingCameraImage by remember { mutableStateOf<CameraImage?>(null) }
     var viewerStart by remember(point.id) { mutableStateOf<Int?>(null) }
+    var deletePrompt by remember(point.id) { mutableStateOf(false) }
     val photoCount = existingImages.size + newImages.size
+    val parsedLongitude = longitude.toDoubleOrNull()
+    val parsedLatitude = latitude.toDoubleOrNull()
+    val coordinateError = when {
+        parsedLongitude == null || parsedLatitude == null -> "请输入有效的经纬度"
+        parsedLongitude !in -180.0..180.0 -> "经度必须在 -180 到 180 之间"
+        parsedLatitude !in -90.0..90.0 -> "纬度必须在 -90 到 90 之间"
+        else -> null
+    }
+    val contentError = pointContentValidation(point.isCheckin, name, desc, photoCount)
+    val formError = contentError ?: coordinateError
     val gallery = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null && photoCount < MAX_CHECKIN_PHOTOS) newImages = (newImages + uri).distinct()
     }
@@ -81,12 +101,17 @@ fun CheckinDetailSheet(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             if (editing) {
-                Text("编辑打卡点", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                Text(if (point.isCheckin) "编辑打卡点" else "编辑轨迹点",
+                    style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                 OutlinedTextField(
                     value = name,
                     onValueChange = { if (it.length <= 100) name = it },
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("标题") },
+                    supportingText = {
+                        if (!point.isCheckin) Text("编辑自动轨迹点需填写标题，保存后将升级为打卡点")
+                    },
+                    isError = contentError != null,
                     singleLine = true,
                 )
                 OutlinedTextField(
@@ -96,6 +121,27 @@ fun CheckinDetailSheet(
                     label = { Text("内容") },
                     minLines = 3,
                 )
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = longitude,
+                        onValueChange = { longitude = it },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("经度") },
+                        leadingIcon = { Icon(Icons.Outlined.LocationOn, null) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        isError = coordinateError != null,
+                    )
+                    OutlinedTextField(
+                        value = latitude,
+                        onValueChange = { latitude = it },
+                        modifier = Modifier.weight(1f),
+                        label = { Text("纬度") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        isError = coordinateError != null,
+                    )
+                }
                 if (photoCount > 0) {
                     EditablePhotos(
                         existingImages = existingImages,
@@ -127,10 +173,13 @@ fun CheckinDetailSheet(
                     }
                 }
                 Text("$photoCount / $MAX_CHECKIN_PHOTOS 张", color = Muted, style = MaterialTheme.typography.bodySmall)
+                formError?.let { Text(it, color = Danger, style = MaterialTheme.typography.bodySmall) }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     TextButton(onClick = {
                         name = point.name.orEmpty()
                         desc = point.desc.orEmpty()
+                        longitude = point.lon.toString()
+                        latitude = point.lat.toString()
                         existingImages = point.images
                         newImages = emptyList()
                         editing = false
@@ -138,8 +187,8 @@ fun CheckinDetailSheet(
                         Text("取消")
                     }
                     Button(
-                        onClick = { onSave(name, desc, existingImages, newImages) },
-                        enabled = !saving,
+                        onClick = { onSave(name, desc, parsedLongitude!!, parsedLatitude!!, existingImages, newImages) },
+                        enabled = !saving && formError == null,
                         modifier = Modifier.weight(1f),
                     ) {
                         if (saving) {
@@ -150,16 +199,29 @@ fun CheckinDetailSheet(
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(point.name?.takeIf(String::isNotBlank) ?: "旅途打卡",
+                        Text(point.name?.takeIf(String::isNotBlank) ?:
+                            if (point.isCheckin) "旅途打卡" else "轨迹点",
                             style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                         Text(point.time.toString().replace('T', ' '), color = Muted,
                             style = MaterialTheme.typography.bodySmall)
                     }
-                    if (editable) FilledTonalIconButton(onClick = { editing = true }) {
-                        Icon(Icons.Outlined.Edit, "编辑打卡点")
+                    if (editable) {
+                        FilledTonalIconButton(onClick = { editing = true }, enabled = !saving) {
+                            Icon(Icons.Outlined.Edit, if (point.isCheckin) "编辑打卡点" else "编辑轨迹点")
+                        }
+                        if (onDelete != null) IconButton(onClick = { deletePrompt = true }, enabled = !saving) {
+                            Icon(Icons.Default.Delete, "删除轨迹点", tint = Danger)
+                        }
                     }
                 }
-                Text(point.desc?.takeIf(String::isNotBlank) ?: "暂无打卡内容", color = if (point.desc.isNullOrBlank()) Muted else LocalContentColor.current)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.LocationOn, null, tint = Green700)
+                    Spacer(Modifier.width(6.dp))
+                    Text("${"%.6f".format(point.lat)}, ${"%.6f".format(point.lon)}",
+                        color = Muted, style = MaterialTheme.typography.bodySmall)
+                }
+                if (point.isCheckin) Text(point.desc?.takeIf(String::isNotBlank) ?: "暂无打卡内容",
+                    color = if (point.desc.isNullOrBlank()) Muted else LocalContentColor.current)
                 if (point.images.isNotEmpty()) {
                     CheckinPhotoGallery(point.images) { viewerStart = it }
                 }
@@ -174,6 +236,17 @@ fun CheckinDetailSheet(
             onDismiss = { viewerStart = null },
         )
     }
+    if (deletePrompt) AlertDialog(
+        onDismissRequest = { if (!saving) deletePrompt = false },
+        title = { Text(if (point.isCheckin) "删除这个打卡点？" else "删除这个轨迹点？") },
+        text = { Text("删除后轨迹线路和里程会立即重新计算，此操作不可撤销。") },
+        confirmButton = {
+            TextButton(onClick = { deletePrompt = false; onDelete?.invoke() }, enabled = !saving) {
+                Text("删除", color = Danger)
+            }
+        },
+        dismissButton = { TextButton(onClick = { deletePrompt = false }, enabled = !saving) { Text("取消") } },
+    )
 }
 
 @Composable
@@ -300,3 +373,14 @@ private fun RemovablePhoto(model: Any, onRemove: () -> Unit) {
 }
 
 private const val MAX_CHECKIN_PHOTOS = 9
+
+internal fun pointContentValidation(
+    wasCheckin: Boolean,
+    name: String,
+    desc: String,
+    photoCount: Int,
+): String? = when {
+    name.isBlank() && (desc.isNotBlank() || photoCount > 0) -> "填写描述或添加图片前，请先填写标题"
+    !wasCheckin && name.isBlank() -> "编辑自动轨迹点时必须填写标题"
+    else -> null
+}

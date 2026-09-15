@@ -53,6 +53,10 @@ class CheckinViewModel(
         val current = _state.value
         val lon = current.lon; val lat = current.lat
         if (lon == null || lat == null) { _state.update { it.copy(result = CheckinResult.Error("尚未获取当前位置")) }; return@launch }
+        if (current.name.isBlank()) {
+            _state.update { it.copy(result = CheckinResult.Error("打卡点标题不能为空")) }
+            return@launch
+        }
         _state.update { it.copy(result = CheckinResult.Loading) }
         try {
             val urls = current.photos.map { uri ->

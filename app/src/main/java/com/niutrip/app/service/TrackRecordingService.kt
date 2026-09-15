@@ -28,6 +28,7 @@ class TrackRecordingService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) { stopSelf(); return START_NOT_STICKY }
+        if (isPaused(this)) { stopSelf(); return START_NOT_STICKY }
         if (intent?.action == ACTION_RESTART && recordingJob?.isActive == true) return START_STICKY
         val saved = active(this)
         val trackId = intent?.getStringExtra(EXTRA_TRACK_ID) ?: saved?.first
@@ -66,7 +67,7 @@ class TrackRecordingService : Service() {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
-        active(this)?.takeIf { it.third == "AUTO" }?.let { scheduleRestart() }
+        active(this)?.takeIf { it.third == "AUTO" && !isPaused(this) }?.let { scheduleRestart() }
         super.onTaskRemoved(rootIntent)
     }
     override fun onBind(intent: Intent?): IBinder? = null
@@ -114,6 +115,7 @@ class TrackRecordingService : Service() {
         private const val ACTIVE_ID = "active_track_id"
         private const val ACTIVE_NAME = "active_track_name"
         private const val ACTIVE_MODE = "active_track_mode"
+        private const val PAUSED = "recording_paused"
         private const val LAST_TRACK_ID = "last_point_track_id"
         private const val LAST_LON = "last_point_lon"
         private const val LAST_LAT = "last_point_lat"
@@ -129,6 +131,7 @@ class TrackRecordingService : Service() {
         private const val ACTION_RESTART = "com.niutrip.app.RESTART_RECORDING"
 
         fun start(context: Context, trackId: String, trackName: String, mode: String = "AUTO") {
+            context.getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(PAUSED, false).apply()
             val intent = Intent(context, TrackRecordingService::class.java)
                 .putExtra(EXTRA_TRACK_ID, trackId).putExtra(EXTRA_TRACK_NAME, trackName)
                 .putExtra(EXTRA_MODE, mode)
@@ -136,19 +139,46 @@ class TrackRecordingService : Service() {
         }
 
         fun resumeIfActive(context: Context) {
-            active(context)?.takeIf { it.third == "AUTO" }?.let { (id, name, mode) ->
+            active(context)?.takeIf { it.third == "AUTO" && !isPaused(context) }?.let { (id, name, mode) ->
                 start(context, id, name, mode)
             }
         }
+
+        fun pause(context: Context, trackId: String, trackName: String, mode: String = "AUTO") {
+            context.getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putString(ACTIVE_ID, trackId)
+                .putString(ACTIVE_NAME, trackName)
+                .putString(ACTIVE_MODE, mode)
+                .putBoolean(PAUSED, true)
+                .apply()
+            cancelRestart(context)
+            context.stopService(Intent(context, TrackRecordingService::class.java))
+        }
+
         fun stop(context: Context) {
+            cancelRestart(context)
             context.getSharedPreferences(PREFS, MODE_PRIVATE).edit().clear().apply()
             context.stopService(Intent(context, TrackRecordingService::class.java))
         }
+
+        fun isPaused(context: Context, trackId: String? = null): Boolean {
+            val prefs = context.getSharedPreferences(PREFS, MODE_PRIVATE)
+            if (!prefs.getBoolean(PAUSED, false)) return false
+            return trackId == null || prefs.getString(ACTIVE_ID, null) == trackId
+        }
+
         fun active(context: Context): Triple<String, String, String>? {
             val prefs = context.getSharedPreferences(PREFS, MODE_PRIVATE)
             return prefs.getString(ACTIVE_ID, null)?.let {
                 Triple(it, prefs.getString(ACTIVE_NAME, "").orEmpty(), prefs.getString(ACTIVE_MODE, null) ?: "AUTO")
             }
+        }
+
+        private fun cancelRestart(context: Context) {
+            val intent = Intent(context, TrackRecordingService::class.java).setAction(ACTION_RESTART)
+            val pending = PendingIntent.getForegroundService(context, RESTART_REQUEST_CODE, intent,
+                PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE)
+            pending?.let { context.getSystemService(AlarmManager::class.java).cancel(it) }
         }
 
         private fun Context.saveLastPoint(trackId: String, location: LocResult.Success) {

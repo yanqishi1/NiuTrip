@@ -16,6 +16,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -54,11 +56,20 @@ import com.niutrip.app.ui.theme.*
     onCheckin: (String) -> Unit,
     onShare: (String) -> Unit,
     onStartService: (String, String, String) -> Unit,
+    onPauseService: (String, String, String) -> Unit,
+    isServicePaused: (String) -> Boolean,
     onStopService: () -> Unit,
 ) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val trackId = state.track?.track_id
+    var recordingPaused by remember(trackId) {
+        mutableStateOf(trackId?.let(isServicePaused) == true)
+    }
+    val automaticRecording = !readOnly && state.track?.track_status == "RECORDING" &&
+        state.track?.track_record_mode == "AUTO"
+    val backgroundRecording = automaticRecording && !recordingPaused
     val permissionChecker = remember(context) { AndroidPermissionChecker(context) }
     var permissionRefresh by remember { mutableIntStateOf(0) }
     var showRecordingPermissions by remember { mutableStateOf(false) }
@@ -79,13 +90,18 @@ import com.niutrip.app.ui.theme.*
     val selfLocationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
         permissionRefresh++
         if (grants[Manifest.permission.ACCESS_FINE_LOCATION] == true || grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true) {
-            viewModel.focusCurrentLocation()
+            viewModel.focusCurrentLocation(recordPoint = backgroundRecording)
         } else viewModel.showError("需要定位权限才能跳转到当前位置")
     }
     val backgroundLocation = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permissionRefresh++ }
     val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permissionRefresh++ }
-    DisposableEffect(lifecycle) {
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) permissionRefresh++ }
+    DisposableEffect(lifecycle, trackId) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                permissionRefresh++
+                recordingPaused = trackId?.let(isServicePaused) == true
+            }
+        }
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
     }
@@ -94,7 +110,6 @@ import com.niutrip.app.ui.theme.*
     var menu by remember { mutableStateOf(false) }; var rename by remember { mutableStateOf(false) }; var delete by remember { mutableStateOf(false) }
     var finishPrompt by remember { mutableStateOf(false) }
     var exitPrompt by remember { mutableStateOf(false) }
-    val backgroundRecording = !readOnly && state.track?.track_status == "RECORDING" && state.track?.track_record_mode == "AUTO"
     val requestBack = { if (backgroundRecording) exitPrompt = true else onBack() }
     BackHandler(enabled = backgroundRecording) { exitPrompt = true }
     LaunchedEffect(state.deleted) { if (state.deleted) onBack() }
@@ -114,7 +129,12 @@ import com.niutrip.app.ui.theme.*
             )
             TopAppBar(title = { Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(state.track?.track_name.orEmpty(), fontWeight = FontWeight.Bold)
-                Spacer(Modifier.width(8.dp)); state.track?.let { StatusPill(statusText(it.track_status), statusColor(it.track_status)) }
+                Spacer(Modifier.width(8.dp)); state.track?.let {
+                    StatusPill(
+                        if (automaticRecording && recordingPaused) "已暂停" else statusText(it.track_status),
+                        if (automaticRecording && recordingPaused) Warning else statusColor(it.track_status),
+                    )
+                }
             } }, navigationIcon = { IconButton(onClick = requestBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } },
                 actions = { if (!readOnly) Box { IconButton(onClick = { menu = true }) { Icon(Icons.Default.MoreVert, "更多") }; DropdownMenu(menu, { menu = false }) {
                     DropdownMenuItem(
@@ -131,7 +151,7 @@ import com.niutrip.app.ui.theme.*
                 } } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White.copy(alpha = .94f)))
             SmallFloatingActionButton(
                 onClick = {
-                    if (permissionChecker.hasFineLocation()) viewModel.focusCurrentLocation()
+                    if (permissionChecker.hasFineLocation()) viewModel.focusCurrentLocation(recordPoint = backgroundRecording)
                     else selfLocationPermission.launch(arrayOf(
                         Manifest.permission.ACCESS_FINE_LOCATION,
                         Manifest.permission.ACCESS_COARSE_LOCATION,
@@ -179,9 +199,11 @@ import com.niutrip.app.ui.theme.*
                 }
                 val track = state.track
                 if (!readOnly && track != null) {
-                    Spacer(Modifier.height(14.dp)); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        when {
-                            TrackStateMachine.canStart(track.track_status.asTrackStatus()) -> Button({
+                    Spacer(Modifier.height(14.dp))
+                    when {
+                        TrackStateMachine.canStart(track.track_status.asTrackStatus()) -> Row(
+                            Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button({
                                 if (permissionChecker.status().canRecordInBackground || track.track_record_mode != "AUTO") {
                                     viewModel.changeStatus("RECORDING") { onStartService(it.track_id, it.track_name, it.track_record_mode) }
                                 } else {
@@ -189,14 +211,54 @@ import com.niutrip.app.ui.theme.*
                                     showRecordingPermissions = true
                                 }
                             }, Modifier.weight(1f)) { Text("开始记录") }
-                            TrackStateMachine.canFinish(track.track_status.asTrackStatus()) -> OutlinedButton(
+                            OutlinedButton({ onShare(track.track_id) }, Modifier.weight(1f)) { Text("分享") }
+                        }
+                        TrackStateMachine.canFinish(track.track_status.asTrackStatus()) && track.track_record_mode == "AUTO" -> {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (recordingPaused) Button(
+                                    onClick = {
+                                        if (permissionChecker.status().canRecordInBackground) {
+                                            onStartService(track.track_id, track.track_name, track.track_record_mode)
+                                            recordingPaused = false
+                                        } else {
+                                            permissionRefresh++
+                                            showRecordingPermissions = true
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Green500),
+                                ) { Icon(Icons.Default.PlayArrow, null); Spacer(Modifier.width(6.dp)); Text("继续记录") }
+                                else Button(
+                                    onClick = {
+                                        onPauseService(track.track_id, track.track_name, track.track_record_mode)
+                                        recordingPaused = true
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Warning),
+                                ) { Icon(Icons.Default.Pause, null); Spacer(Modifier.width(6.dp)); Text("暂停记录") }
+                                OutlinedButton(
+                                    onClick = { finishPrompt = true },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Danger),
+                                ) { Text("结束记录") }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton({ onCheckin(track.track_id) }, Modifier.weight(1f)) { Text("手动打卡") }
+                                OutlinedButton({ onShare(track.track_id) }, Modifier.weight(1f)) { Text("分享") }
+                            }
+                        }
+                        else -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
                                 onClick = { finishPrompt = true },
                                 modifier = Modifier.weight(1f),
                                 colors = ButtonDefaults.outlinedButtonColors(contentColor = Danger),
                             ) { Text("结束记录") }
+                            if (TrackStateMachine.canCheckin(track.track_status.asTrackStatus())) {
+                                OutlinedButton({ onCheckin(track.track_id) }, Modifier.weight(1f)) { Text("手动打卡") }
+                            }
+                            OutlinedButton({ onShare(track.track_id) }, Modifier.weight(1f)) { Text("分享") }
                         }
-                        if (TrackStateMachine.canCheckin(track.track_status.asTrackStatus())) OutlinedButton({ onCheckin(track.track_id) }, Modifier.weight(1f)) { Text("手动打卡") }
-                        OutlinedButton({ onShare(track.track_id) }, Modifier.weight(1f)) { Text("分享") }
                     }
                 }
             }
@@ -208,7 +270,7 @@ import com.niutrip.app.ui.theme.*
     }
     if (delete) AlertDialog({ delete = false }, title = { Text("删除轨迹？") }, text = { Text("轨迹会从列表移除，此操作不可撤销。") }, confirmButton = { TextButton({
         delete = false
-        if (backgroundRecording) onStopService()
+        if (automaticRecording) onStopService()
         viewModel.delete()
     }) { Text("删除", color = Danger) } }, dismissButton = { TextButton({ delete = false }) { Text("取消") } })
     if (finishPrompt) AlertDialog(
@@ -239,12 +301,16 @@ import com.niutrip.app.ui.theme.*
             CheckinDetailSheet(
                 point = point,
                 editable = !readOnly,
-                saving = state.updatingCheckin,
+                saving = state.updatingPoint,
                 onDismiss = { selectedPointId = null },
-                onSave = { name, desc, existingImages, newImages ->
-                    viewModel.updateCheckin(point.id, name, desc, existingImages, newImages) {
+                onSave = { name, desc, longitude, latitude, existingImages, newImages ->
+                    viewModel.updatePoint(point.id, point.isCheckin, name, desc, longitude, latitude,
+                        existingImages, newImages) {
                         selectedPointId = null
                     }
+                },
+                onDelete = {
+                    viewModel.deletePoint(point.id) { selectedPointId = null }
                 },
             )
         }
@@ -279,7 +345,14 @@ import com.niutrip.app.ui.theme.*
             val track = state.track
             if (track != null && permissionChecker.status().canRecordInBackground) {
                 showRecordingPermissions = false
-                viewModel.changeStatus("RECORDING") { onStartService(it.track_id, it.track_name, it.track_record_mode) }
+                if (track.track_status == "RECORDING") {
+                    onStartService(track.track_id, track.track_name, track.track_record_mode)
+                    recordingPaused = false
+                } else {
+                    viewModel.changeStatus("RECORDING") {
+                        onStartService(it.track_id, it.track_name, it.track_record_mode)
+                    }
+                }
             } else permissionRefresh++
         },
     )
