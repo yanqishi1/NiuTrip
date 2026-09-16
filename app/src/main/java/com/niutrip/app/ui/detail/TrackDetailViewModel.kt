@@ -223,13 +223,17 @@ class TrackDetailViewModel(
                     point_source = source,
                 ).also { viewModelScope.launch { syncRepository.flushOnce() } }
             } else {
-                repository.updatePoint(id, pointId, PointPatchIn(
+                val updated = repository.updatePoint(id, pointId, PointPatchIn(
                     longitude = longitude,
                     latitude = latitude,
                     point_name = normalizedName,
                     point_desc = normalizedDesc,
                     point_img_url = images,
                 ))
+                runCatching { repository.detail(id) }.onSuccess { track ->
+                    _state.update { it.copy(track = track) }
+                }
+                updated
             }
         }.onSuccess { updated ->
             _state.update { old ->

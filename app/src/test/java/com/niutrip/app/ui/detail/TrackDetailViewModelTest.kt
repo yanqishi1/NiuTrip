@@ -144,6 +144,27 @@ class TrackDetailViewModelTest {
         assertFalse(vm.state.value.updatingPoint)
     }
 
+    @Test fun `adding checkin photos refreshes automatic track cover`() = runTest {
+        val original = pointDto("p1")
+        var cover = "/static/covers/default.svg"
+        val api = object : StubApi() {
+            override suspend fun track(id: String, recordView: Boolean) =
+                trackDto().copy(track_img_url = cover)
+            override suspend fun points(id: String, page: Int) =
+                PointsPage(1, null, null, listOf(original))
+            override suspend fun patchPoint(trackId: String, pointId: String, body: PointPatchIn): PointDto {
+                cover = body.point_img_url.first()
+                return original.copy(point_name = body.point_name, point_img_url = body.point_img_url)
+            }
+        }
+        val vm = vm(listOf(original), LocationSource { LocResult.Failure("unused") }, api)
+        vm.load()
+        vm.updatePoint("p1", true, "Check-in", "", 100.0, 30.0,
+            listOf("/media/first.jpg", "/media/second.jpg"), emptyList())
+        assertEquals("/media/first.jpg", vm.state.value.track?.track_img_url)
+        assertFalse(vm.state.value.updatingPoint)
+    }
+
     @Test fun `auto point edit requires title and upgrades to checkin`() = runTest {
         val original = pointDto("p1").copy(point_source = "AUTO", point_name = null)
         var patchCalls = 0
