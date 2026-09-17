@@ -37,6 +37,9 @@ import com.niutrip.app.ui.theme.*
     onBack: () -> Unit,
 ) {
     val state by viewModel.state.collectAsState()
+    val finished = state.data?.track?.let {
+        it.track_status == "FINISHED" || (it.track_status == null && it.end_time != null)
+    } == true
     val context = LocalContext.current
     val permissionChecker = remember(context) { AndroidPermissionChecker(context) }
     var selectedPointId by remember { mutableStateOf<String?>(null) }
@@ -52,15 +55,15 @@ import com.niutrip.app.ui.theme.*
             AMapView(
                 days = state.days,
                 selectedDayIdx = state.selectedDay,
-                latest = state.days.lastOrNull()?.points?.lastOrNull(),
+                latest = if (finished) null else state.days.lastOrNull()?.points?.lastOrNull(),
                 modifier = Modifier.fillMaxSize(),
                 onPointClick = { selectedPointId = it.id },
                 current = state.current,
                 currentAvatarUrl = currentUserAvatarUrl,
                 focusCurrentRequest = state.currentFocusRequest,
-                showRouteEnd = state.data?.track?.end_time != null,
+                showRouteEnd = finished,
             )
-            TopAppBar(title = { Column { Text(state.data?.track?.track_name.orEmpty(), fontWeight = FontWeight.Bold); Text("${state.data?.track?.owner_username} 的轨迹", color = Info, style = MaterialTheme.typography.bodySmall) } },
+            TopAppBar(title = { Column { Text(state.data?.track?.track_name.orEmpty(), fontWeight = FontWeight.Bold); Text("${state.data?.track?.owner_username} 的轨迹${if (finished) " · 已结束" else ""}", color = Info, style = MaterialTheme.typography.bodySmall) } },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White.copy(.94f)))
             SmallFloatingActionButton(
                 onClick = {

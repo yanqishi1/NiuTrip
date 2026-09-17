@@ -45,6 +45,30 @@ class SyncRepository(private val api: ApiService, private val dao: PendingPointD
 
     suspend fun localPoints(trackId: String): List<PendingPointEntity> = dao.forTrack(trackId)
 
+    /** 分享/结束前仅补传目标轨迹；失败不删除，留给用户重试或导出图片。 */
+    suspend fun flushTrack(trackId: String): FlushResult = mutex.withLock {
+        var uploaded = 0
+        while (true) {
+            val rows = dao.forTrack(trackId).take(200)
+            if (rows.isEmpty()) break
+            val points = rows.map { row ->
+                PointIn(row.pointId, row.lon, row.lat, row.name, row.desc,
+                    runCatching { Json.decodeFromString<List<String>>(row.imgs) }.getOrDefault(emptyList()),
+                    row.time.toBeijingDateTime().toApiTime(), row.source)
+            }
+            try {
+                apiCall { api.postPoints(trackId, PointsIn(points)) }
+                dao.deleteAll(rows.map { it.id })
+                uploaded += rows.size
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                return@withLock FlushResult.Failed(error)
+            }
+        }
+        FlushResult.Success(uploaded)
+    }
+
     suspend fun updateLocalPoint(
         pointId: String,
         lon: Double,

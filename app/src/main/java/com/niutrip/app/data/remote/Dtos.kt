@@ -103,6 +103,7 @@ import kotlinx.serialization.Serializable
     val record_mode: String,
     val owner_username: String,
     val share_mode: String,
+    val track_status: String? = null,
 )
 @Serializable data class ShareStatsDto(
     val point_count: Int,

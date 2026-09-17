@@ -75,4 +75,29 @@ class SyncRepositoryTest {
             return PostPointsOut(body.points.size)
         }
     }
+
+    @Test fun `target flush drains every batch without touching other tracks`() = runTest {
+        val rows = (1L..450L).map { row(it, "p$it") } + row(451, "other", "t2")
+        val dao = FakePendingPointDao(rows)
+        val sizes = mutableListOf<Int>()
+        val repo = SyncRepository(object : StubApi() {
+            override suspend fun postPoints(id: String, body: PointsIn): PostPointsOut {
+                assertEquals("t1", id)
+                sizes.add(body.points.size)
+                return PostPointsOut(body.points.size)
+            }
+        }, dao)
+        assertEquals(FlushResult.Success(450), repo.flushTrack("t1"))
+        assertEquals(listOf(200, 200, 50), sizes)
+        assertEquals(listOf("other"), dao.rows.map { it.pointId })
+    }
+
+    @Test fun `target flush preserves rejected points for image export`() = runTest {
+        val dao = FakePendingPointDao(listOf(row(1, "p1")))
+        val repo = SyncRepository(object : StubApi() {
+            override suspend fun postPoints(id: String, body: PointsIn): PostPointsOut = throw ApiException(400, "finished")
+        }, dao)
+        assertTrue(repo.flushTrack("t1") is FlushResult.Failed)
+        assertEquals(listOf("p1"), dao.rows.map { it.pointId })
+    }
 }

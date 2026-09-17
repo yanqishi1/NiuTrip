@@ -54,6 +54,48 @@ class TrackDetailViewModelTest {
     private fun pointDto(id: String) = PointDto(point_id = id, longitude = 100.0, latitude = 30.0,
         point_time = "2026-09-11T10:00:00", point_source = "MANUAL")
 
+    @Test fun `finishing uploads pending points before setting finished`() = runTest {
+        val calls = mutableListOf<String>()
+        val dao = FakePendingPointDao(listOf(PendingPointEntity(id = 1, trackId = "t1", pointId = "p1",
+            lon = 100.0, lat = 30.0, time = 1_700_000_000_000, source = "AUTO", createdAt = 0)))
+        val api = object : StubApi() {
+            override suspend fun postPoints(id: String, body: PointsIn): PostPointsOut {
+                calls.add("upload")
+                return PostPointsOut(body.points.size)
+            }
+            override suspend fun patchTrack(id: String, body: TrackPatchIn): TrackDto {
+                calls.add("finish")
+                return trackDto().copy(track_status = "FINISHED")
+            }
+        }
+        val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao),
+            LocationSource { LocResult.Failure("unused") }, SyncRepository(api, dao), ImagePreparer { error("unused") })
+        vm.changeStatus("FINISHED")
+        assertEquals(listOf("upload", "finish"), calls)
+        assertEquals("FINISHED", vm.state.value.track?.track_status)
+        assertTrue(dao.rows.isEmpty())
+    }
+
+    @Test fun `failed final sync preserves points and does not finish`() = runTest {
+        val dao = FakePendingPointDao(listOf(PendingPointEntity(id = 1, trackId = "t1", pointId = "p1",
+            lon = 100.0, lat = 30.0, time = 1_700_000_000_000, source = "AUTO", createdAt = 0)))
+        var finished = false
+        val api = object : StubApi() {
+            override suspend fun postPoints(id: String, body: PointsIn): PostPointsOut = error("offline")
+            override suspend fun patchTrack(id: String, body: TrackPatchIn): TrackDto {
+                finished = true
+                return trackDto().copy(track_status = "FINISHED")
+            }
+        }
+        val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao),
+            LocationSource { LocResult.Failure("unused") }, SyncRepository(api, dao), ImagePreparer { error("unused") })
+        vm.changeStatus("FINISHED")
+        assertFalse(finished)
+        assertEquals(1, dao.rows.size)
+        assertTrue(vm.state.value.error!!.contains("暂未结束"))
+        assertFalse(vm.state.value.changingStatus)
+    }
+
     private fun vm(points: List<PointDto>, source: LocationSource, api: StubApi? = null): TrackDetailViewModel {
         val resolved = api ?: object : StubApi() {
             override suspend fun track(id: String, recordView: Boolean) = trackDto()

@@ -38,6 +38,7 @@ data class DetailState(
     val currentFocusRequest: Int = 0,
     val updatingImage: Boolean = false,
     val updatingPoint: Boolean = false,
+    val changingStatus: Boolean = false,
 )
 
 class TrackDetailViewModel(
@@ -147,9 +148,16 @@ class TrackDetailViewModel(
     }
     fun selectDay(index: Int) = _state.update { it.copy(selectedDay = index) }
     fun changeStatus(status: String, onChanged: (TrackDto) -> Unit = {}) = viewModelScope.launch {
-        runCatching { repository.patch(id, TrackPatchIn(track_status = status)) }.onSuccess { track ->
-            _state.update { it.copy(track = track) }; onChanged(track)
-        }.onFailure { error -> _state.update { it.copy(error = error.message) } }
+        if (_state.value.changingStatus) return@launch
+        _state.update { it.copy(changingStatus = true, error = null) }
+        runCatching {
+            if (status == "FINISHED" && syncRepository.flushTrack(id) is com.niutrip.app.data.repo.FlushResult.Failed) {
+                error("轨迹点尚未同步，暂未结束轨迹，请联网后重试")
+            }
+            repository.patch(id, TrackPatchIn(track_status = status))
+        }.onSuccess { track ->
+            _state.update { it.copy(track = track, changingStatus = false) }; onChanged(track)
+        }.onFailure { error -> _state.update { it.copy(error = error.message, changingStatus = false) } }
     }
     fun rename(name: String) = viewModelScope.launch {
         if (name.isBlank()) return@launch

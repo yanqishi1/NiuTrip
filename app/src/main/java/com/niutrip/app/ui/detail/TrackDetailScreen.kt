@@ -201,6 +201,9 @@ import com.niutrip.app.ui.theme.*
                 if (!readOnly && track != null) {
                     Spacer(Modifier.height(14.dp))
                     when {
+                        track.track_status == "FINISHED" -> {
+                            OutlinedButton({ onShare(track.track_id) }, Modifier.fillMaxWidth()) { Text("分享") }
+                        }
                         TrackStateMachine.canStart(track.track_status.asTrackStatus()) -> Row(
                             Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button({
@@ -239,6 +242,7 @@ import com.niutrip.app.ui.theme.*
                                 OutlinedButton(
                                     onClick = { finishPrompt = true },
                                     modifier = Modifier.weight(1f),
+                                    enabled = !state.changingStatus,
                                     colors = ButtonDefaults.outlinedButtonColors(contentColor = Danger),
                                 ) { Text("结束记录") }
                             }
@@ -252,6 +256,7 @@ import com.niutrip.app.ui.theme.*
                             OutlinedButton(
                                 onClick = { finishPrompt = true },
                                 modifier = Modifier.weight(1f),
+                                enabled = !state.changingStatus,
                                 colors = ButtonDefaults.outlinedButtonColors(contentColor = Danger),
                             ) { Text("结束记录") }
                             if (TrackStateMachine.canCheckin(track.track_status.asTrackStatus())) {
@@ -280,6 +285,11 @@ import com.niutrip.app.ui.theme.*
         confirmButton = {
             TextButton(onClick = {
                 finishPrompt = false
+                state.track?.let { track ->
+                    if (automaticRecording) onPauseService(track.track_id, track.track_name, track.track_record_mode)
+                    else onStopService()
+                }
+                recordingPaused = true
                 viewModel.changeStatus("FINISHED") { onStopService() }
             }) { Text("结束轨迹", color = Danger) }
         },

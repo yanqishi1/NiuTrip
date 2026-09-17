@@ -135,7 +135,9 @@ private data class Tab(val label: String, val route: String, val icon: ImageVect
         }
     }
     shareTrackId?.let { id ->
-        val vm: ShareViewModel = viewModel(key = "share-$id", factory = ViewModelFactory { ShareViewModel(id, container.api) })
+        val vm: ShareViewModel = viewModel(key = "share-$id", factory = ViewModelFactory {
+            ShareViewModel(id, container.api, container.trackRepository, container.syncRepository)
+        })
         ShareSheet(vm) { shareTrackId = null }
     }
     val incomingShareToken = pendingToken ?: clipboardToken
