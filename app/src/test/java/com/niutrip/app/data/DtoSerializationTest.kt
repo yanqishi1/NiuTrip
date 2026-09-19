@@ -2,6 +2,7 @@ package com.niutrip.app.data
 
 import com.niutrip.app.data.remote.ShareDataDto
 import com.niutrip.app.data.remote.TrackDto
+import com.niutrip.app.data.remote.TrackOverviewDto
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -17,5 +18,10 @@ class DtoSerializationTest {
         val value = json.decodeFromString<ShareDataDto>("""{"track":{"track_id":"t","track_name":"n","track_img_url":"","start_time":null,"end_time":null,"record_mode":"AUTO","owner_username":"张三","share_mode":"ONCE"},"stats":{"point_count":1,"checkin_count":0,"days":1},"latest":null,"days":[{"date":"2026-08-12","points":[{"point_id":"p1","longitude":100.0,"latitude":30.0,"point_time":"2026-08-12T10:00:00","point_source":"AUTO"}]}]}""")
         assertEquals("张三", value.track.owner_username)
         assertEquals(100.0, value.days.first().points.first().toLite()!!.lon, 0.0)
+    }
+    @Test fun `overview reads compact days and exact distance`() {
+        val value = json.decodeFromString<TrackOverviewDto>("""{"track":{"track_id":"t","track_name":"n","track_record_mode":"AUTO","track_status":"RECORDING"},"total_distance_meters":123.5,"days":[{"date":"2026-09-14","points":[{"point_id":"p","longitude":100.0,"latitude":30.0,"point_time":"2026-09-14T10:00:00","point_source":"AUTO"}]}]}""")
+        assertEquals(123.5, value.total_distance_meters, 0.0)
+        assertEquals("p", value.days.single().points.single().point_id)
     }
 }

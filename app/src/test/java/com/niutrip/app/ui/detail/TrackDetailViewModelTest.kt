@@ -13,6 +13,8 @@ import com.niutrip.app.data.remote.PointsPage
 import com.niutrip.app.data.remote.PostPointsOut
 import com.niutrip.app.data.remote.StubApi
 import com.niutrip.app.data.remote.TrackDto
+import com.niutrip.app.data.remote.TrackOverviewDto
+import com.niutrip.app.data.remote.ShareDayDto
 import com.niutrip.app.data.remote.TrackPatchIn
 import com.niutrip.app.data.repo.SyncRepository
 import com.niutrip.app.data.repo.TrackRepository
@@ -27,6 +29,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -53,6 +57,47 @@ class TrackDetailViewModelTest {
         track_record_mode = "AUTO", track_status = "RECORDING", point_count = 0)
     private fun pointDto(id: String) = PointDto(point_id = id, longitude = 100.0, latitude = 30.0,
         point_time = "2026-09-11T10:00:00", point_source = "MANUAL")
+
+    @Test fun `overview displays before full pages and retains exact preview stats`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val api = object : StubApi() {
+            override suspend fun trackOverview(id: String, recordView: Boolean) = TrackOverviewDto(
+                trackDto().copy(point_count = 1306, checkin_count = 29), 321_000.0,
+                listOf(ShareDayDto("2026-09-11", listOf(pointDto("preview").copy(point_source = "AUTO")))))
+            override suspend fun points(id: String, page: Int): PointsPage {
+                gate.await()
+                return PointsPage(1, null, null, listOf(pointDto("full")))
+            }
+        }
+        val vm = vm(emptyList(), LocationSource { LocResult.Failure("unused") }, api)
+        vm.load()
+
+        assertFalse(vm.state.value.loading)
+        assertTrue(vm.state.value.pointsLoading)
+        assertFalse(vm.state.value.pointsLoaded)
+        assertEquals(1306, vm.state.value.track?.point_count)
+        assertEquals(321_000.0, vm.state.value.totalDistanceMeters, 0.0)
+        assertEquals("preview", vm.state.value.days.single().points.single().id)
+
+        gate.complete(Unit)
+        val loaded = withTimeout(5_000) { vm.state.first { it.pointsLoaded } }
+        assertEquals("full", loaded.days.single().points.single().id)
+        assertFalse(loaded.pointsLoading)
+    }
+
+    @Test fun `failed full pages leave overview visible and retryable`() = runTest {
+        val api = object : StubApi() {
+            override suspend fun trackOverview(id: String, recordView: Boolean) = TrackOverviewDto(
+                trackDto().copy(point_count = 1), 88.0,
+                listOf(ShareDayDto("2026-09-11", listOf(pointDto("preview")))))
+            override suspend fun points(id: String, page: Int): PointsPage = error("offline")
+        }
+        val vm = vm(emptyList(), LocationSource { LocResult.Failure("unused") }, api)
+        vm.load()
+        assertFalse(vm.state.value.loading)
+        assertEquals("preview", vm.state.value.days.single().points.single().id)
+        assertEquals("offline", vm.state.value.pointsError)
+    }
 
     @Test fun `finishing uploads pending points before setting finished`() = runTest {
         val calls = mutableListOf<String>()

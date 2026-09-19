@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.niutrip.app.core.*
 import com.niutrip.app.data.remote.PointDto
+import com.niutrip.app.data.remote.ApiException
 import com.niutrip.app.data.remote.PointPatchIn
 import com.niutrip.app.data.remote.TrackDto
 import com.niutrip.app.data.remote.TrackPatchIn
@@ -16,6 +17,8 @@ import com.niutrip.app.service.LocResult
 import com.niutrip.app.service.LocationSource
 import com.niutrip.app.ui.checkin.ImagePreparer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -29,6 +32,9 @@ data class DetailState(
     val track: TrackDto? = null,
     val days: List<DayGroup> = emptyList(),
     val points: List<PointDto> = emptyList(),
+    val pointsLoaded: Boolean = false,
+    val pointsLoading: Boolean = false,
+    val pointsError: String? = null,
     val totalDistanceMeters: Double = 0.0,
     val selectedDay: Int = -1,
     val error: String? = null,
@@ -51,6 +57,7 @@ class TrackDetailViewModel(
 ) : ViewModel() {
     private val _state = MutableStateFlow(DetailState()); val state = _state.asStateFlow()
     private var viewRequestSent = false
+    private var fullPointsJob: Job? = null
 
     init {
         // 本地入库即更新地图和里程；上传成功后不再整页回拉云端点。
@@ -66,32 +73,89 @@ class TrackDetailViewModel(
 
     // 静默刷新：已有内容时不闪全屏 loading；失败时保留旧内容（只有首屏失败才显示错误页）
     fun load() = viewModelScope.launch {
+        fullPointsJob?.cancel()
         if (_state.value.track == null) _state.update { it.copy(loading = true, error = null) }
         val shouldRecordView = recordSharedView && !viewRequestSent
         if (shouldRecordView) viewRequestSent = true
         var detailLoaded = false
         try {
-            val track = repository.detail(id, recordView = shouldRecordView)
-            detailLoaded = true
-            val points = mergeTrackPoints(repository.points(id), syncRepository.localPoints(id))
-            val litePoints = points.mapNotNull(PointDto::toLite)
-            val recordedFallback = if (track.track_status == "RECORDING" && track.track_record_mode == "AUTO") {
-                litePoints.maxByOrNull(PointLite::time)?.copy(id = "current")
-            } else null
-            _state.update { old ->
-                val current = recordedFallback?.takeIf { fallback ->
-                    old.current == null || fallback.time.isAfter(old.current.time)
-                } ?: old.current
-                old.copy(loading = false, error = null, track = track,
-                    days = DayGrouper.group(litePoints), points = points,
-                    totalDistanceMeters = RouteGeometry.totalDistanceMeters(litePoints), current = current)
+            val overview = try {
+                repository.overview(id, recordView = shouldRecordView)
+            } catch (error: ApiException) {
+                if (error.code != 404) throw error
+                null // Allow an older server without the overview endpoint.
             }
-            if (points.isEmpty() && _state.value.current == null) locateCurrent(focus = true, showError = false)
+            val track = overview?.track ?: repository.detail(id, recordView = shouldRecordView)
+            detailLoaded = true
+            if (overview == null) {
+                applyFullPoints(track, mergeTrackPoints(repository.points(id), syncRepository.localPoints(id)))
+            } else {
+                val previewDays = overview.days.mapNotNull { day ->
+                    val date = runCatching { java.time.LocalDate.parse(day.date) }.getOrNull()
+                    date?.let { DayGroup(it, day.points.mapNotNull(PointDto::toLite)) }
+                }
+                val previewLatest = previewDays.lastOrNull()?.points?.lastOrNull()
+                    ?.takeIf { track.track_status == "RECORDING" && track.track_record_mode == "AUTO" }
+                    ?.copy(id = "current")
+                _state.update { old ->
+                    old.copy(loading = false, error = null, track = track,
+                        days = if (old.pointsLoaded) old.days else previewDays,
+                        totalDistanceMeters = if (old.pointsLoaded) old.totalDistanceMeters
+                            else overview.total_distance_meters,
+                        current = newerCurrent(old.current, previewLatest),
+                        pointsLoading = true, pointsError = null)
+                }
+                if (track.point_count == 0 && _state.value.current == null) {
+                    locateCurrent(focus = true, showError = false)
+                }
+                fullPointsJob = viewModelScope.launch {
+                    try {
+                        val fetched = mergeTrackPoints(repository.points(id), syncRepository.localPoints(id))
+                        val points = mergePointDtos(fetched, _state.value.points)
+                        val prepared = withContext(Dispatchers.Default) { preparePoints(points) }
+                        applyFullPoints(track, points, prepared)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Throwable) {
+                        _state.update { it.copy(pointsLoading = false,
+                            pointsError = error.message ?: "轨迹点加载失败") }
+                    }
+                }
+            }
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: Throwable) {
             if (shouldRecordView && !detailLoaded) viewRequestSent = false
             if (_state.value.track == null) _state.update { it.copy(loading = false, error = error.message ?: "加载失败") }
         }
     }
+
+    private data class PreparedPoints(val days: List<DayGroup>, val distance: Double, val latest: PointLite?)
+
+    private fun preparePoints(points: List<PointDto>): PreparedPoints {
+        val litePoints = points.mapNotNull(PointDto::toLite)
+        return PreparedPoints(DayGrouper.group(litePoints), RouteGeometry.totalDistanceMeters(litePoints),
+            litePoints.maxByOrNull(PointLite::time))
+    }
+
+    private fun applyFullPoints(track: TrackDto, points: List<PointDto>,
+                                prepared: PreparedPoints = preparePoints(points)) {
+        val recordedFallback = prepared.latest
+            ?.takeIf { track.track_status == "RECORDING" && track.track_record_mode == "AUTO" }
+            ?.copy(id = "current")
+        _state.update { old ->
+            old.copy(loading = false, error = null,
+                track = if (old.pointsLoading) old.track ?: track else track,
+                days = prepared.days, points = points, pointsLoaded = true,
+                pointsLoading = false, pointsError = null,
+                totalDistanceMeters = prepared.distance,
+                current = newerCurrent(old.current, recordedFallback))
+        }
+        if (points.isEmpty() && _state.value.current == null) locateCurrent(focus = true, showError = false)
+    }
+
+    private fun newerCurrent(current: PointLite?, candidate: PointLite?): PointLite? =
+        candidate?.takeIf { current == null || it.time.isAfter(current.time) } ?: current
 
     fun focusCurrentLocation(recordPoint: Boolean = true) =
         locateCurrent(focus = true, showError = true, recordPoint = recordPoint)
@@ -100,6 +164,7 @@ class TrackDetailViewModel(
         updateCurrent(point.lon, point.lat, point.timeMillis)
         _state.update { old ->
             val points = mergePointDtos(old.points, listOf(point.toPointDto()))
+            if (!old.pointsLoaded) return@update old.copy(points = points)
             val litePoints = points.mapNotNull(PointDto::toLite)
             old.copy(
                 points = points,

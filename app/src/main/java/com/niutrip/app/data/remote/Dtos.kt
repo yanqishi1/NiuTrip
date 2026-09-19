@@ -113,6 +113,11 @@ import kotlinx.serialization.Serializable
     val viewer_count: Int = 0,
 )
 @Serializable data class ShareDayDto(val date: String, val points: List<PointDto>)
+@Serializable data class TrackOverviewDto(
+    val track: TrackDto,
+    val total_distance_meters: Double,
+    val days: List<ShareDayDto>,
+)
 @Serializable data class ShareDataDto(
     val track: ShareTrackDto,
     val stats: ShareStatsDto,

@@ -74,4 +74,20 @@ class MarkerPresentationTest {
 
         assertEquals(listOf("d2"), visibleRoutePaths(days, 1).single().points.map { it.id })
     }
+
+    @Test fun `route sampling retains endpoints and respects limit`() {
+        val points = (0..999).map { point("p$it", "2026-09-14T10:00:00") }
+        val sampled = sampledRoutePoints(points, 80)
+        assertEquals(80, sampled.size)
+        assertEquals("p0", sampled.first().id)
+        assertEquals("p999", sampled.last().id)
+    }
+
+    @Test fun `auto markers are spaced and capped`() {
+        val points = (0..1000).map { MarkerScreenPoint(it * 2, 100) }
+        val selected = nonOverlappingAutoMarkerIndices(points, 16f, maxMarkers = 40)
+        assertEquals(40, selected.size)
+        assertEquals(0, selected.first())
+        assertEquals(true, selected.zipWithNext().all { (a, b) -> points[b].x - points[a].x >= 16 })
+    }
 }

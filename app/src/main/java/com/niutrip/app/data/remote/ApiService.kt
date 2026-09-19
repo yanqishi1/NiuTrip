@@ -19,6 +19,10 @@ interface ApiService {
         @Path("trackId") id: String,
         @Query("record_view") recordView: Boolean = false,
     ): TrackDto
+    @GET("tracks/{trackId}/overview/") suspend fun trackOverview(
+        @Path("trackId") id: String,
+        @Query("record_view") recordView: Boolean = false,
+    ): TrackOverviewDto
     @PATCH("tracks/{trackId}/") suspend fun patchTrack(@Path("trackId") id: String, @Body body: TrackPatchIn): TrackDto
     @Multipart @PUT("tracks/{trackId}/cover/") suspend fun updateTrackCover(@Path("trackId") id: String, @Part image: MultipartBody.Part): TrackDto
     @DELETE("tracks/{trackId}/") suspend fun deleteTrack(@Path("trackId") id: String)

@@ -121,7 +121,7 @@ import com.niutrip.app.ui.theme.*
                 selectedDayIdx = state.selectedDay,
                 latest = state.days.lastOrNull()?.points?.lastOrNull(),
                 modifier = Modifier.fillMaxSize(),
-                onPointClick = { selectedPointId = it.id },
+                onPointClick = { if (state.pointsLoaded) selectedPointId = it.id },
                 current = state.current,
                 currentAvatarUrl = currentUserAvatarUrl,
                 focusCurrentRequest = state.currentFocusRequest,
@@ -190,7 +190,13 @@ import com.niutrip.app.ui.theme.*
                 }
                 Spacer(Modifier.height(12.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-                    Stat("${state.points.size}", "轨迹点"); Stat("${state.points.count { it.point_source == "MANUAL" }}", "打卡"); Stat("${state.days.size}", "天数")
+                    Stat("${if (state.pointsLoaded) state.points.size else state.track?.point_count ?: 0}", "轨迹点")
+                    Stat("${if (state.pointsLoaded) state.points.count { it.point_source == "MANUAL" } else state.track?.checkin_count ?: 0}", "打卡")
+                    Stat("${state.days.size}", "天数")
+                }
+                if (state.pointsLoading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
+                if (state.pointsError != null) TextButton(onClick = viewModel::load) {
+                    Text("轨迹点加载失败，重试")
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
