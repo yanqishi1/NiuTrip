@@ -2,12 +2,16 @@ package com.niutrip.app.ui.detail
 
 import android.app.Application
 import com.niutrip.app.data.local.FakePendingPointDao
+import com.niutrip.app.data.local.FakeCloudPointDao
+import com.niutrip.app.data.local.CloudPointEntity
 import com.niutrip.app.data.local.PendingPointEntity
+import com.niutrip.app.data.local.PointSyncStateEntity
 import com.niutrip.app.data.local.TrackDao
 import com.niutrip.app.data.local.TrackEntity
 import com.niutrip.app.data.remote.ApiException
 import com.niutrip.app.data.remote.PointDto
 import com.niutrip.app.data.remote.PointPatchIn
+import com.niutrip.app.data.remote.PointChangesDto
 import com.niutrip.app.data.remote.PointsIn
 import com.niutrip.app.data.remote.PointsPage
 import com.niutrip.app.data.remote.PostPointsOut
@@ -22,6 +26,7 @@ import com.niutrip.app.service.LocResult
 import com.niutrip.app.service.LocationSource
 import com.niutrip.app.ui.checkin.ImagePreparer
 import com.niutrip.app.ui.checkin.PreparedImage
+import com.niutrip.app.ui.detail.map.RECENT_SELECTION
 import android.net.Uri
 import okhttp3.MultipartBody
 import java.io.File
@@ -30,6 +35,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -57,6 +63,59 @@ class TrackDetailViewModelTest {
         track_record_mode = "AUTO", track_status = "RECORDING", point_count = 0)
     private fun pointDto(id: String) = PointDto(point_id = id, longitude = 100.0, latitude = 30.0,
         point_time = "2026-09-11T10:00:00", point_source = "MANUAL")
+
+    @Test fun `detail defaults to recent points`() {
+        assertEquals(RECENT_SELECTION, DetailState().selectedDay)
+    }
+
+    @Test fun `cloud point wins when a pending point has the same id`() {
+        val pending = PendingPointEntity(
+            trackId = "t1", pointId = "same", lon = 99.0, lat = 29.0,
+            time = 1_700_000_000_000, source = "AUTO", createdAt = 0)
+
+        val merged = mergeTrackPoints(
+            listOf(pointDto("same").copy(longitude = 116.397)), listOf(pending))
+
+        assertEquals(116.397, merged.single().longitude ?: 0.0, 0.0)
+    }
+
+    @Test fun `completed local baseline renders before network refresh finishes`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val track = trackDto().copy(point_count = 1)
+        val trackDao = object : TrackDao by FakeDao {
+            override suspend fun get(id: String) = TrackEntity.from(track)
+        }
+        val cachedPoint = pointDto("cached")
+        val pointCache = FakeCloudPointDao(
+            initialPoints = listOf(CloudPointEntity.from("t1", cachedPoint)),
+            initialStates = listOf(PointSyncStateEntity(
+                "t1", "cursor-1", true, "test-account")),
+        )
+        val api = object : StubApi() {
+            override suspend fun track(id: String, recordView: Boolean): TrackDto {
+                gate.await()
+                return track
+            }
+            override suspend fun trackOverview(id: String, recordView: Boolean): TrackOverviewDto =
+                error("completed local baseline must skip full overview scan")
+            override suspend fun pointChanges(id: String, cursor: String?) =
+                PointChangesDto("cursor-2", false, emptyList())
+        }
+        val sync = SyncRepository(api, FakePendingPointDao())
+        val vm = TrackDetailViewModel(
+            "t1", TrackRepository(api, trackDao, pointCache),
+            LocationSource { LocResult.Failure("unused") }, sync,
+            ImagePreparer { error("unused") })
+
+        vm.load()
+
+        val cached = withContext(Dispatchers.Default) {
+            withTimeout(5_000) { vm.state.first { !it.loading } }
+        }
+        assertTrue(cached.pointsLoaded)
+        assertEquals("cached", cached.points.single().point_id)
+        gate.complete(Unit)
+    }
 
     @Test fun `overview displays before full pages and retains exact preview stats`() = runTest {
         val gate = CompletableDeferred<Unit>()
@@ -97,6 +156,25 @@ class TrackDetailViewModelTest {
         assertFalse(vm.state.value.loading)
         assertEquals("preview", vm.state.value.days.single().points.single().id)
         assertEquals("offline", vm.state.value.pointsError)
+    }
+
+    @Test fun `full point load requests large server pages`() = runTest {
+        val requests = mutableListOf<Pair<Int, Int>>()
+        val api = object : StubApi() {
+            override suspend fun track(id: String, recordView: Boolean) =
+                trackDto().copy(point_count = 2)
+            override suspend fun pointsLargePage(id: String, page: Int, pageSize: Int): PointsPage {
+                requests += page to pageSize
+                return if (page == 1) PointsPage(2, "next", null, listOf(pointDto("p1")))
+                else PointsPage(2, null, "previous", listOf(pointDto("p2")))
+            }
+        }
+
+        val vm = vm(emptyList(), LocationSource { LocResult.Failure("unused") }, api)
+        vm.load()
+
+        assertEquals(listOf(1 to 1000, 2 to 1000), requests)
+        assertEquals(listOf("p1", "p2"), vm.state.value.points.map { it.point_id })
     }
 
     @Test fun `finishing uploads pending points before setting finished`() = runTest {
@@ -188,22 +266,27 @@ class TrackDetailViewModelTest {
         assertEquals(listOf(true, false), flags)
     }
 
-    @Test fun `recording track with points uses latest point as current fallback`() = runTest {
-        val vm = vm(points = listOf(pointDto("p1")), source = { LocResult.Success(99.9, 9.9, 1) })
+    @Test fun `recording track uses latest point when device location fails`() = runTest {
+        val vm = vm(points = listOf(pointDto("p1")), source = { LocResult.Failure("unavailable") })
         vm.load()
         assertEquals(100.0, vm.state.value.current?.lon ?: 0.0, 1e-9)
         assertEquals(30.0, vm.state.value.current?.lat ?: 0.0, 1e-9)
     }
 
-    @Test fun `location button focuses current position even when track has points`() = runTest {
+    @Test fun `opening track locates immediately and location button can focus again`() = runTest {
+        var locationCalls = 0
         val vm = vm(points = listOf(pointDto("p1")), source = {
+            locationCalls++
             LocResult.Success(101.25, 30.75, 1_700_000_000_000)
         })
         vm.load()
+        assertEquals(1, locationCalls)
+        assertEquals(1, vm.state.value.currentFocusRequest)
         vm.focusCurrentLocation()
+        assertEquals(2, locationCalls)
         assertEquals(101.25, vm.state.value.current?.lon ?: 0.0, 1e-9)
         assertEquals(30.75, vm.state.value.current?.lat ?: 0.0, 1e-9)
-        assertEquals(1, vm.state.value.currentFocusRequest)
+        assertEquals(2, vm.state.value.currentFocusRequest)
         assertFalse(vm.state.value.locatingCurrent)
     }
 
@@ -370,7 +453,8 @@ class TrackDetailViewModelTest {
         assertFalse(vm.state.value.loading)          // 刷新期间不闪全屏 loading
         assertEquals(1, vm.state.value.points.size)  // 旧内容仍在
         gate.complete(Unit)
-        assertEquals(2, vm.state.value.points.size)  // 刷新完成后看到新点
+        val refreshed = withTimeout(5_000) { vm.state.first { it.points.size == 2 } }
+        assertEquals(2, refreshed.points.size)       // 刷新完成后看到新点
     }
 
     @Test fun `pending points render locally and upload does not reload cloud points`() = runTest {

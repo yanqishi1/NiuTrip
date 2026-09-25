@@ -19,5 +19,10 @@ open class FakePendingPointDao(initial: List<PendingPointEntity> = emptyList()) 
         rows.removeAll { it.pointId == pointId }
         return removed
     }
+    override suspend fun deletePoints(pointIds: List<String>): Int {
+        val removed = rows.count { it.pointId in pointIds }
+        rows.removeAll { it.pointId in pointIds }
+        return removed
+    }
     override suspend fun count(trackId: String?): Int = rows.size
 }

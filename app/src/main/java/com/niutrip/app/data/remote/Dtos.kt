@@ -78,6 +78,8 @@ import kotlinx.serialization.Serializable
     val point_time: String,
     val point_source: String,
     val report_time: String? = null,
+    val is_deleted: Boolean = false,
+    val updated_at: String? = null,
 ) {
     fun toLite(): PointLite? {
         val parsed = point_time.toLocalDateTimeOrNull() ?: return null
@@ -85,6 +87,11 @@ import kotlinx.serialization.Serializable
             latitude ?: point_latitude ?: return null, point_source == "MANUAL", point_name, point_desc, point_img_url)
     }
 }
+@Serializable data class PointChangesDto(
+    val cursor: String,
+    val has_more: Boolean,
+    val results: List<PointDto>,
+)
 @Serializable data class PointsPage(
     val count: Int,
     val next: String? = null,

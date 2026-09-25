@@ -26,15 +26,17 @@ class TokenStoreTest {
         val store = TokenStore(context)
         assertFalse(store.hasAvatarSnapshot)
 
-        store.save("token")
+        store.save("token", "user-1")
         store.saveAvatarUrl("/media/avatar.jpg")
 
         val restored = TokenStore(context)
         assertTrue(restored.hasAvatarSnapshot)
+        assertEquals("user-1", restored.userId)
         assertEquals("/media/avatar.jpg", restored.avatarUrl.value)
 
         restored.clear()
         assertNull(restored.token)
+        assertNull(restored.userId)
         assertNull(restored.avatarUrl.value)
         assertFalse(restored.hasAvatarSnapshot)
     }

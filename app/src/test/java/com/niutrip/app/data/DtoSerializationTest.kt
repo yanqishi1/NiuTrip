@@ -1,6 +1,7 @@
 package com.niutrip.app.data
 
 import com.niutrip.app.data.remote.ShareDataDto
+import com.niutrip.app.data.remote.PointChangesDto
 import com.niutrip.app.data.remote.TrackDto
 import com.niutrip.app.data.remote.TrackOverviewDto
 import kotlinx.serialization.decodeFromString
@@ -23,5 +24,11 @@ class DtoSerializationTest {
         val value = json.decodeFromString<TrackOverviewDto>("""{"track":{"track_id":"t","track_name":"n","track_record_mode":"AUTO","track_status":"RECORDING"},"total_distance_meters":123.5,"days":[{"date":"2026-09-14","points":[{"point_id":"p","longitude":100.0,"latitude":30.0,"point_time":"2026-09-14T10:00:00","point_source":"AUTO"}]}]}""")
         assertEquals(123.5, value.total_distance_meters, 0.0)
         assertEquals("p", value.days.single().points.single().point_id)
+    }
+
+    @Test fun `point changes read cloud tombstones and cursor`() {
+        val value = json.decodeFromString<PointChangesDto>("""{"cursor":"next","has_more":false,"results":[{"point_id":"p1","point_longitude":100.0,"point_latitude":30.0,"point_time":"2026-09-24T10:00:00","point_source":"AUTO","is_deleted":true,"updated_at":"2026-09-24T11:00:00"}]}""")
+        assertEquals("next", value.cursor)
+        assertEquals(true, value.results.single().is_deleted)
     }
 }

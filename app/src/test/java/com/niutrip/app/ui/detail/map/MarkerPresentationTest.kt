@@ -83,6 +83,66 @@ class MarkerPresentationTest {
         assertEquals("p999", sampled.last().id)
     }
 
+    @Test fun `recent selection keeps only latest fifty points across day boundaries`() {
+        val firstDay = (0 until 30).map { index ->
+            point("old-$index", "2026-09-14T10:${index.toString().padStart(2, '0')}:00")
+        }
+        val secondDay = (0 until 30).map { index ->
+            point("new-$index", "2026-09-15T10:${index.toString().padStart(2, '0')}:00")
+        }
+
+        val visible = visibleDaysForSelection(
+            listOf(
+                DayGroup(LocalDate.parse("2026-09-14"), firstDay),
+                DayGroup(LocalDate.parse("2026-09-15"), secondDay),
+            ),
+            RECENT_SELECTION,
+        )
+
+        assertEquals(50, visible.sumOf { it.points.size })
+        assertEquals(listOf(20, 30), visible.map { it.points.size })
+        assertEquals("old-10", visible.first().points.first().id)
+        assertEquals("new-29", visible.last().points.last().id)
+    }
+
+    @Test fun `recent camera includes current location but full route does not`() {
+        val route = listOf(point("route", "2026-09-14T10:00:00"))
+        val current = point("current", "2026-09-15T10:00:00")
+
+        assertEquals(listOf("route", "current"),
+            cameraPointsForSelection(route, RECENT_SELECTION, current).map { it.id })
+        assertEquals(listOf("route"),
+            cameraPointsForSelection(route, ALL_DAYS_SELECTION, current).map { it.id })
+    }
+
+    @Test fun `route point budget decreases as geographic span grows and stays finite`() {
+        fun routeWithLongitudeSpan(span: Double) = listOf(
+            point("start", "2026-09-14T10:00:00").copy(lon = 0.0, lat = 0.0),
+            point("middle", "2026-09-14T10:01:00").copy(lon = span / 2, lat = 0.0),
+            point("end", "2026-09-14T10:02:00").copy(lon = span, lat = 0.0),
+        )
+
+        val budgets = listOf(0.1, 0.5, 2.0, 5.0, 15.0)
+            .map { routePointBudget(routeWithLongitudeSpan(it)) }
+
+        assertEquals(listOf(2_000, 1_400, 1_000, 700, 500), budgets)
+        assertEquals(true, budgets.all { it in 1..2_000 })
+        assertEquals(true, budgets.zipWithNext().all { (near, far) -> far <= near })
+    }
+
+    @Test fun `route sampling keeps a major turn`() {
+        val points = (0 until 101).map { index ->
+            point("p$index", "2026-09-14T10:00:00").copy(
+                lon = index.toDouble(),
+                lat = if (index == 50) 20.0 else 0.0,
+            )
+        }
+
+        val sampled = sampledRoutePoints(points, 10)
+
+        assertEquals(true, sampled.any { it.id == "p50" })
+    }
+
     @Test fun `auto markers are spaced and capped`() {
         val points = (0..1000).map { MarkerScreenPoint(it * 2, 100) }
         val selected = nonOverlappingAutoMarkerIndices(points, 16f, maxMarkers = 40)

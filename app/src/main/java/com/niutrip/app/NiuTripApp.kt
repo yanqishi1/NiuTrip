@@ -7,6 +7,7 @@ import androidx.room.Room
 import com.amap.api.location.AMapLocationClient
 import com.niutrip.app.data.TokenStore
 import com.niutrip.app.data.local.AppDatabase
+import com.niutrip.app.data.local.MIGRATION_2_3
 import com.niutrip.app.data.remote.ApiService
 import com.niutrip.app.data.remote.AuthInterceptor
 import com.niutrip.app.data.repo.AuthRepository
@@ -40,10 +41,14 @@ class NiuTripApp : Application(), ImageLoaderFactory {
         AMapLocationClient.updatePrivacyShow(this, true, true)
         AMapLocationClient.updatePrivacyAgree(this, true)
         container = AppContainer(this)
-        if (container.tokenStore.token != null && !container.tokenStore.hasAvatarSnapshot) {
+        if (container.tokenStore.token != null &&
+            (!container.tokenStore.hasAvatarSnapshot || container.tokenStore.userId == null)) {
             container.applicationScope.launch {
                 runCatching { container.api.profile() }
-                    .onSuccess { container.tokenStore.saveAvatarUrl(it.avata_url) }
+                    .onSuccess {
+                        container.tokenStore.saveUserId(it.user_id)
+                        container.tokenStore.saveAvatarUrl(it.avata_url)
+                    }
             }
         }
         // 系统回收进程后，SharedPreferences 中仍保留正在自动记录的轨迹；进程重建时恢复前台服务。
@@ -100,7 +105,10 @@ class AppContainer(app: Application) {
     // 随进程存活的 scope：网络回调/service 销毁时的收尾补传挂在这里（不随组件生命周期取消）
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val tokenStore = TokenStore(app)
-    val db: AppDatabase = Room.databaseBuilder(app, AppDatabase::class.java, "niutrip.db").fallbackToDestructiveMigration().build()
+    val db: AppDatabase = Room.databaseBuilder(app, AppDatabase::class.java, "niutrip.db")
+        .addMigrations(MIGRATION_2_3)
+        .fallbackToDestructiveMigration()
+        .build()
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
     private val client = OkHttpClient.Builder()
         .addInterceptor(AuthInterceptor(tokenStore))
@@ -109,7 +117,10 @@ class AppContainer(app: Application) {
     val api: ApiService = Retrofit.Builder().baseUrl(BuildConfig.API_BASE_URL).client(client)
         .addConverterFactory(json.asConverterFactory("application/json".toMediaType())).build().create(ApiService::class.java)
     val authRepository = AuthRepository(api, tokenStore)
-    val trackRepository = TrackRepository(api, db.trackDao())
+    val trackRepository = TrackRepository(
+        api, db.trackDao(), db.cloudPointDao(), db.pendingPointDao(),
+        accountKey = { tokenStore.cacheOwnerKey },
+    )
     val syncRepository = SyncRepository(api, db.pendingPointDao())
     val locationSource: LocationSource = AMapLocationSource(app)
 }

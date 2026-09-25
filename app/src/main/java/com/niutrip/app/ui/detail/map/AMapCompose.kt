@@ -24,6 +24,11 @@ import com.niutrip.app.ui.common.absoluteMediaUrl
 import coil.imageLoader
 import coil.request.ImageRequest
 import coil.request.SuccessResult
+import kotlin.math.floor
+
+internal const val RECENT_SELECTION = -2
+internal const val ALL_DAYS_SELECTION = -1
+internal const val RECENT_POINT_LIMIT = 50
 
 @Composable fun AMapView(
     days: List<DayGroup>,
@@ -46,12 +51,16 @@ import coil.request.SuccessResult
     var visibleZoom by remember { mutableFloatStateOf(mapView.map.cameraPosition.zoom) }
     val markerPresentation = markerPresentationForZoom(visibleZoom)
     val visibleDays = remember(days, selectedDayIdx) {
-        if (selectedDayIdx in days.indices) listOf(days[selectedDayIdx]) else days
+        visibleDaysForSelection(days, selectedDayIdx)
     }
+    val visiblePoints = remember(visibleDays) { visibleDays.flatMap(DayGroup::points) }
     val routePaths = remember(days, selectedDayIdx) { visibleRoutePaths(days, selectedDayIdx) }
+    val routeLimit = remember(routePaths) {
+        routePointBudget(routePaths.asSequence().flatMap { it.points.asSequence() }.asIterable())
+    }
     val thumbnailRequests = if (markerPresentation.checkinStyle == CheckinMarkerStyle.CARD) {
         visibleThumbnailRequests(
-            points = visibleDays.flatMap(DayGroup::points),
+            points = visiblePoints,
             viewport = visibleViewport,
         )
     } else emptyList()
@@ -102,15 +111,13 @@ import coil.request.SuccessResult
     AndroidView(factory = { mapView }, modifier = modifier) { view ->
         val map = view.map
         map.uiSettings.isZoomControlsEnabled = false
-        val routeLimit = if (visibleZoom < 12f) 600 else Int.MAX_VALUE
         if (overlays.routeDays !== days || overlays.routeIndex != selectedDayIdx ||
             overlays.routeLimit != routeLimit) {
             overlays.polylines.forEach(Polyline::remove)
             overlays.polylines.clear()
-            val pointCount = routePaths.sumOf { it.points.size }
-            routePaths.forEach { path ->
-                val limit = if (routeLimit == Int.MAX_VALUE) Int.MAX_VALUE else
-                    maxOf(2, routeLimit * path.points.size / maxOf(1, pointCount))
+            val pathLimits = routePathPointLimits(routePaths, routeLimit)
+            routePaths.forEachIndexed { index, path ->
+                val limit = pathLimits[index]
                 val points = sampledRoutePoints(path.points, limit).map { LatLng(it.lat, it.lon) }
                 if (points.size >= 2) overlays.polylines += map.addPolyline(
                     PolylineOptions().addAll(points).width(10f).color(dayColor(path.dayIndex).toInt()))
@@ -122,11 +129,7 @@ import coil.request.SuccessResult
         val hasPoints = visibleDays.any { it.points.isNotEmpty() }
         if (cameraMemory.selectedDayIdx != selectedDayIdx || !cameraMemory.hadPoints && hasPoints) {
             cameraMemory.selectedDayIdx = selectedDayIdx
-            val all = visibleDays.flatMap { it.points }
-            val bounds = LatLngBounds.builder()
-            all.forEach { bounds.include(LatLng(it.lat, it.lon)) }
-            if (all.size == 1) map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(all[0].lat, all[0].lon), 15f))
-            else if (all.size > 1) runCatching { map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds.build(), 90)) }
+            animateToPoints(map, cameraPointsForSelection(visiblePoints, selectedDayIdx, current))
         }
         cameraMemory.hadPoints = hasPoints
         if (overlays.markerDays !== days || overlays.markerIndex != selectedDayIdx ||
@@ -174,7 +177,7 @@ import coil.request.SuccessResult
         val checkinCandidates = if (markerPresentation.checkinStyle == CheckinMarkerStyle.HIDDEN || visibleViewport == null) {
             emptyList()
         } else {
-            visibleDays.flatMap(DayGroup::points)
+            visiblePoints
                 .filter { it.isCheckin && it.id !in endpointPointIds }
                 .filter { visibleViewport?.contains(it) != false }
         }
@@ -187,14 +190,14 @@ import coil.request.SuccessResult
             minVerticalPx = markerPresentation.minVerticalSpacingDp * context.resources.displayMetrics.density,
         ).mapTo(mutableSetOf()) { checkinCandidates[it].id }
         val autoCandidates = if (markerPresentation.showAutoPoints && visibleViewport != null) {
-            visibleDays.flatMap(DayGroup::points).filter { !it.isCheckin && visibleViewport?.contains(it) == true }
+            visiblePoints.filter { !it.isCheckin && visibleViewport?.contains(it) == true }
         } else emptyList()
         val visibleAutoIds = nonOverlappingAutoMarkerIndices(
             autoCandidates.map { map.projection.toScreenLocation(LatLng(it.lat, it.lon)).toMarkerScreenPoint() },
             minSpacingPx = 16f * context.resources.displayMetrics.density,
         ).mapTo(mutableSetOf()) { autoCandidates[it].id }
         visibleDays.forEach { day ->
-            val index = days.indexOf(day)
+            val index = days.indexOfFirst { it.date == day.date }.coerceAtLeast(0)
             day.points.forEach pointLoop@ { point ->
                 if (point.id !in visibleCheckinIds && point.id !in visibleAutoIds) return@pointLoop
                 val position = LatLng(point.lat, point.lon)
@@ -279,7 +282,11 @@ import coil.request.SuccessResult
         if (current != null && (!hasPoints && cameraMemory.focusRequest == -1 ||
                 focusCurrentRequest > cameraMemory.focusRequest)) {
             cameraMemory.focusRequest = focusCurrentRequest
-            map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(current.lat, current.lon), 16f))
+            if (selectedDayIdx == RECENT_SELECTION) {
+                animateToPoints(map, cameraPointsForSelection(visiblePoints, selectedDayIdx, current))
+            } else {
+                map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(current.lat, current.lon), 16f))
+            }
         }
         map.setOnMarkerClickListener { marker ->
             overlays.pointLookup[marker.id]?.let(onPointClick)
@@ -296,6 +303,19 @@ import coil.request.SuccessResult
             })
         }
     }
+}
+
+private fun animateToPoints(map: AMap, points: List<PointLite>) {
+    val first = points.firstOrNull() ?: return
+    val hasSpan = points.any { it.lat != first.lat || it.lon != first.lon }
+    if (!hasSpan) {
+        map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(first.lat, first.lon), 15f))
+        return
+    }
+    val bounds = LatLngBounds.builder().apply {
+        points.forEach { include(LatLng(it.lat, it.lon)) }
+    }.build()
+    runCatching { map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, 90)) }
 }
 
 private class MapCameraMemory(
@@ -327,23 +347,134 @@ private class MapOverlays {
 
 internal data class RoutePath(val dayIndex: Int, val points: List<PointLite>)
 
+internal fun visibleDaysForSelection(
+    days: List<DayGroup>,
+    selectedDayIdx: Int,
+): List<DayGroup> = when {
+    selectedDayIdx == RECENT_SELECTION -> recentDays(days)
+    selectedDayIdx in days.indices -> listOf(days[selectedDayIdx])
+    else -> days
+}
+
+private fun recentDays(days: List<DayGroup>): List<DayGroup> {
+    val recent = ArrayList<PointLite>(RECENT_POINT_LIMIT)
+    outer@ for (day in days.asReversed()) {
+        for (point in day.points.asReversed()) {
+            recent += point
+            if (recent.size == RECENT_POINT_LIMIT) break@outer
+        }
+    }
+    return recent.sortedBy(PointLite::time)
+        .groupBy { it.time.toLocalDate() }
+        .map { (date, points) -> DayGroup(date, points) }
+}
+
+internal fun cameraPointsForSelection(
+    visiblePoints: List<PointLite>,
+    selectedDayIdx: Int,
+    current: PointLite?,
+): List<PointLite> = if (selectedDayIdx == RECENT_SELECTION && current != null) {
+    visiblePoints + current
+} else {
+    visiblePoints
+}
+
 internal fun visibleRoutePaths(days: List<DayGroup>, selectedDayIdx: Int): List<RoutePath> {
     if (selectedDayIdx in days.indices) {
         return listOf(RoutePath(selectedDayIdx, RouteGeometry.orderedPath(days[selectedDayIdx].points)))
     }
     var previousEnd: PointLite? = null
-    return days.mapIndexedNotNull { index, day ->
+    return visibleDaysForSelection(days, selectedDayIdx).mapNotNull { day ->
         val points = RouteGeometry.orderedPath(day.points)
-        if (points.isEmpty()) return@mapIndexedNotNull null
+        if (points.isEmpty()) return@mapNotNull null
         val connected = previousEnd?.let { listOf(it) + points } ?: points
         previousEnd = points.last()
-        RoutePath(index, connected)
+        RoutePath(days.indexOfFirst { it.date == day.date }.coerceAtLeast(0), connected)
     }
 }
 
 internal fun sampledRoutePoints(points: List<PointLite>, limit: Int): List<PointLite> {
     if (points.size <= limit) return points
-    return (0 until limit).map { index -> points[index * (points.lastIndex) / (limit - 1)] }
+    if (limit <= 1) return points.take(1)
+    if (limit == 2) return listOf(points.first(), points.last())
+
+    val sampled = ArrayList<PointLite>(limit)
+    val every = (points.size - 2).toDouble() / (limit - 2)
+    var selectedIndex = 0
+    sampled += points.first()
+    for (bucket in 0 until limit - 2) {
+        val averageStart = (floor((bucket + 1) * every) + 1).toInt().coerceAtMost(points.size)
+        val averageEnd = (floor((bucket + 2) * every) + 1).toInt().coerceAtMost(points.size)
+        var averageLon = 0.0
+        var averageLat = 0.0
+        for (index in averageStart until averageEnd) {
+            averageLon += points[index].lon
+            averageLat += points[index].lat
+        }
+        val averageSize = averageEnd - averageStart
+        if (averageSize > 0) {
+            averageLon /= averageSize
+            averageLat /= averageSize
+        } else {
+            averageLon = points.last().lon
+            averageLat = points.last().lat
+        }
+
+        val rangeStart = (floor(bucket * every) + 1).toInt()
+        val rangeEnd = (floor((bucket + 1) * every) + 1).toInt()
+            .coerceIn(rangeStart + 1, points.lastIndex)
+        val anchor = points[selectedIndex]
+        var maxArea = -1.0
+        var nextIndex = rangeStart
+        for (index in rangeStart until rangeEnd) {
+            val candidate = points[index]
+            val area = kotlin.math.abs(
+                (anchor.lon - averageLon) * (candidate.lat - anchor.lat) -
+                    (anchor.lon - candidate.lon) * (averageLat - anchor.lat),
+            )
+            if (area > maxArea) {
+                maxArea = area
+                nextIndex = index
+            }
+        }
+        sampled += points[nextIndex]
+        selectedIndex = nextIndex
+    }
+    sampled += points.last()
+    return sampled
+}
+
+internal fun routePointBudget(points: Iterable<PointLite>): Int {
+    var pointCount = 0
+    var minLat = Double.POSITIVE_INFINITY
+    var maxLat = Double.NEGATIVE_INFINITY
+    var minLon = Double.POSITIVE_INFINITY
+    var maxLon = Double.NEGATIVE_INFINITY
+    points.forEach { point ->
+        pointCount++
+        minLat = minOf(minLat, point.lat)
+        maxLat = maxOf(maxLat, point.lat)
+        minLon = minOf(minLon, point.lon)
+        maxLon = maxOf(maxLon, point.lon)
+    }
+    if (pointCount <= 2) return pointCount
+    val spanMeters = RouteGeometry.distanceMeters(minLat, minLon, maxLat, maxLon)
+    return when {
+        spanMeters > 1_000_000 -> 500
+        spanMeters > 300_000 -> 700
+        spanMeters > 100_000 -> 1_000
+        spanMeters > 30_000 -> 1_400
+        else -> 2_000
+    }
+}
+
+internal fun routePathPointLimits(paths: List<RoutePath>, totalLimit: Int): List<Int> {
+    val pointCount = paths.sumOf { it.points.size }
+    if (pointCount <= totalLimit) return paths.map { it.points.size }
+    return paths.map { path ->
+        maxOf(2, (totalLimit.toLong() * path.points.size / pointCount).toInt())
+            .coerceAtMost(path.points.size)
+    }
 }
 
 internal fun nonOverlappingAutoMarkerIndices(

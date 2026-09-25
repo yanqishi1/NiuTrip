@@ -13,5 +13,6 @@ interface PendingPointDao {
     @Query("SELECT * FROM pending_points WHERE pointId = :pointId LIMIT 1") suspend fun get(pointId: String): PendingPointEntity?
     @Query("DELETE FROM pending_points WHERE id IN (:ids)") suspend fun deleteAll(ids: List<Long>)
     @Query("DELETE FROM pending_points WHERE pointId = :pointId") suspend fun delete(pointId: String): Int
+    @Query("DELETE FROM pending_points WHERE pointId IN (:pointIds)") suspend fun deletePoints(pointIds: List<String>): Int
     @Query("SELECT COUNT(*) FROM pending_points WHERE (:trackId IS NULL OR trackId = :trackId)") suspend fun count(trackId: String? = null): Int
 }
