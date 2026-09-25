@@ -46,7 +46,6 @@ import com.niutrip.app.ui.create.openAppPermissionSettings
 import com.niutrip.app.ui.create.requestBatteryWhitelist
 import com.niutrip.app.ui.detail.map.AMapView
 import com.niutrip.app.ui.detail.map.ALL_DAYS_SELECTION
-import com.niutrip.app.ui.detail.map.RECENT_SELECTION
 import com.niutrip.app.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -127,6 +126,7 @@ import com.niutrip.app.ui.theme.*
                 current = state.current,
                 currentAvatarUrl = currentUserAvatarUrl,
                 focusCurrentRequest = state.currentFocusRequest,
+                showFullRoute = state.fullRouteFocused,
                 showRouteEnd = state.track?.track_status == "FINISHED",
             )
             TopAppBar(title = { Row(verticalAlignment = Alignment.CenterVertically) {
@@ -187,10 +187,7 @@ import com.niutrip.app.ui.theme.*
                 }
                 Spacer(Modifier.height(10.dp))
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    item { DayChip("最近", state.selectedDay == RECENT_SELECTION, Green500) {
-                        viewModel.selectDay(RECENT_SELECTION)
-                    } }
-                    item { DayChip("全程", state.selectedDay == ALL_DAYS_SELECTION, Green500) {
+                    item { DayChip("全程", state.fullRouteFocused, Green500) {
                         viewModel.selectDay(ALL_DAYS_SELECTION)
                     } }
                     itemsIndexed(state.days) { index, day -> DayChip(day.date.toString().substring(5), state.selectedDay == index, Color(dayColor(index))) { viewModel.selectDay(index) } }

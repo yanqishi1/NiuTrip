@@ -16,7 +16,7 @@ import com.niutrip.app.data.repo.TrackRepository
 import com.niutrip.app.service.LocResult
 import com.niutrip.app.service.LocationSource
 import com.niutrip.app.ui.checkin.ImagePreparer
-import com.niutrip.app.ui.detail.map.RECENT_SELECTION
+import com.niutrip.app.ui.detail.map.ALL_DAYS_SELECTION
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -37,7 +37,8 @@ data class DetailState(
     val pointsLoading: Boolean = false,
     val pointsError: String? = null,
     val totalDistanceMeters: Double = 0.0,
-    val selectedDay: Int = RECENT_SELECTION,
+    val selectedDay: Int = ALL_DAYS_SELECTION,
+    val fullRouteFocused: Boolean = false,
     val error: String? = null,
     val deleted: Boolean = false,
     val current: PointLite? = null,
@@ -76,6 +77,7 @@ class TrackDetailViewModel(
     // 静默刷新：已有内容时不闪全屏 loading；失败时保留旧内容（只有首屏失败才显示错误页）
     fun load() = viewModelScope.launch {
         fullPointsJob?.cancel()
+        _state.update { it.copy(fullRouteFocused = false) }
         locateCurrent(focus = true, showError = false, recordPoint = false)
         if (_state.value.track == null) {
             val cachedTrack = repository.cachedDetail(id)
@@ -218,6 +220,7 @@ class TrackDetailViewModel(
                 _state.update { it.copy(current = PointLite("current", time.toBeijingDateTime(),
                     location.lon, location.lat, false, null, null, emptyList()),
                     currentIsDeviceLocation = true,
+                    fullRouteFocused = if (focus) false else it.fullRouteFocused,
                     locatingCurrent = false,
                     currentFocusRequest = if (focus) it.currentFocusRequest + 1 else it.currentFocusRequest) }
                 if (recordPoint && !recordSharedView && _state.value.track?.track_status == "RECORDING") {
@@ -236,7 +239,12 @@ class TrackDetailViewModel(
             }
         }
     }
-    fun selectDay(index: Int) = _state.update { it.copy(selectedDay = index) }
+    fun selectDay(index: Int) = _state.update {
+        it.copy(
+            selectedDay = index,
+            fullRouteFocused = index == ALL_DAYS_SELECTION,
+        )
+    }
     fun changeStatus(status: String, onChanged: (TrackDto) -> Unit = {}) = viewModelScope.launch {
         if (_state.value.changingStatus) return@launch
         _state.update { it.copy(changingStatus = true, error = null) }
@@ -360,8 +368,8 @@ class TrackDetailViewModel(
                     days = days,
                     totalDistanceMeters = RouteGeometry.totalDistanceMeters(litePoints),
                     selectedDay = old.selectedDay.takeIf {
-                        it == RECENT_SELECTION || it == -1 || it in days.indices
-                    } ?: RECENT_SELECTION,
+                        it == ALL_DAYS_SELECTION || it in days.indices
+                    } ?: ALL_DAYS_SELECTION,
                     updatingPoint = false,
                 )
             }

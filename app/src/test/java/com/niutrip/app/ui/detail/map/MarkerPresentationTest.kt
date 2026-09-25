@@ -29,6 +29,12 @@ class MarkerPresentationTest {
         assertEquals(true, near.showAutoPoints)
         assertEquals(.85f, near.checkinScale)
         assertEquals(1f, street.checkinScale)
+        assertEquals(16f, autoPointSpacingDpForZoom(14f))
+        assertEquals(8f, autoPointSpacingDpForZoom(16f))
+        assertEquals(4f, autoPointSpacingDpForZoom(18f))
+        assertEquals(240, autoPointLimitForZoom(14f))
+        assertEquals(1_000, autoPointLimitForZoom(16f))
+        assertEquals(3_000, autoPointLimitForZoom(18f))
     }
 
     @Test fun `decluttering respects existing endpoints and accepted checkins`() {
@@ -83,36 +89,44 @@ class MarkerPresentationTest {
         assertEquals("p999", sampled.last().id)
     }
 
-    @Test fun `recent selection keeps only latest fifty points across day boundaries`() {
-        val firstDay = (0 until 30).map { index ->
-            point("old-$index", "2026-09-14T10:${index.toString().padStart(2, '0')}:00")
-        }
-        val secondDay = (0 until 30).map { index ->
-            point("new-$index", "2026-09-15T10:${index.toString().padStart(2, '0')}:00")
+    @Test fun `detail route keeps only viewport runs with boundary points`() {
+        val route = (0 until 10).map { index ->
+            point("p$index", "2026-09-14T10:00:00").copy(lon = index.toDouble(), lat = 0.0)
         }
 
-        val visible = visibleDaysForSelection(
-            listOf(
-                DayGroup(LocalDate.parse("2026-09-14"), firstDay),
-                DayGroup(LocalDate.parse("2026-09-15"), secondDay),
-            ),
-            RECENT_SELECTION,
+        val detailed = routePathsInViewport(
+            paths = listOf(RoutePath(0, route)),
+            viewport = MapViewport(south = -1.0, west = 3.0, north = 1.0, east = 5.0),
         )
 
-        assertEquals(50, visible.sumOf { it.points.size })
-        assertEquals(listOf(20, 30), visible.map { it.points.size })
-        assertEquals("old-10", visible.first().points.first().id)
-        assertEquals("new-29", visible.last().points.last().id)
+        assertEquals(listOf("p2", "p3", "p4", "p5", "p6"),
+            detailed.single().points.map { it.id })
     }
 
-    @Test fun `recent camera includes current location but full route does not`() {
-        val route = listOf(point("route", "2026-09-14T10:00:00"))
-        val current = point("current", "2026-09-15T10:00:00")
+    @Test fun `initial camera uses fifty point route window nearest current location`() {
+        val route = (0 until 100).map { index ->
+            point("p$index", "2026-09-14T10:00:00").copy(lon = index.toDouble(), lat = 0.0)
+        }
+        val current = point("current", "2026-09-15T10:00:00").copy(lon = 70.1, lat = 0.0)
 
-        assertEquals(listOf("route", "current"),
-            cameraPointsForSelection(route, RECENT_SELECTION, current).map { it.id })
-        assertEquals(listOf("route"),
-            cameraPointsForSelection(route, ALL_DAYS_SELECTION, current).map { it.id })
+        val cameraPoints = cameraPointsNearCurrent(route, current)
+
+        assertEquals(51, cameraPoints.size)
+        assertEquals("p45", cameraPoints.first().id)
+        assertEquals("p94", cameraPoints[cameraPoints.lastIndex - 1].id)
+        assertEquals("current", cameraPoints.last().id)
+    }
+
+    @Test fun `initial camera falls back to last fifty points without a location`() {
+        val route = (0 until 80).map { index ->
+            point("p$index", "2026-09-14T10:00:00")
+        }
+
+        val cameraPoints = cameraPointsNearCurrent(route, null)
+
+        assertEquals(50, cameraPoints.size)
+        assertEquals("p30", cameraPoints.first().id)
+        assertEquals("p79", cameraPoints.last().id)
     }
 
     @Test fun `route point budget decreases as geographic span grows and stays finite`() {
@@ -149,5 +163,16 @@ class MarkerPresentationTest {
         assertEquals(40, selected.size)
         assertEquals(0, selected.first())
         assertEquals(true, selected.zipWithNext().all { (a, b) -> points[b].x - points[a].x >= 16 })
+    }
+
+    @Test fun `street zoom can reveal every distinguishable point in viewport`() {
+        val points = (0 until 500).map { MarkerScreenPoint(it * 5, 100) }
+
+        val selected = nonOverlappingAutoMarkerIndices(
+            points,
+            minSpacingPx = autoPointSpacingDpForZoom(18f),
+        )
+
+        assertEquals(points.indices.toList(), selected)
     }
 }

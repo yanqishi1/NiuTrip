@@ -26,9 +26,10 @@ import coil.request.ImageRequest
 import coil.request.SuccessResult
 import kotlin.math.floor
 
-internal const val RECENT_SELECTION = -2
 internal const val ALL_DAYS_SELECTION = -1
-internal const val RECENT_POINT_LIMIT = 50
+internal const val INITIAL_CAMERA_POINT_LIMIT = 50
+internal const val DETAIL_ROUTE_ZOOM = 15f
+internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
 
 @Composable fun AMapView(
     days: List<DayGroup>,
@@ -39,6 +40,7 @@ internal const val RECENT_POINT_LIMIT = 50
     current: PointLite? = null,  // 地图上的当前位置图标
     currentAvatarUrl: String? = null,
     focusCurrentRequest: Int = 0,
+    showFullRoute: Boolean = true,
     showEndpoints: Boolean = true,
     showRouteEnd: Boolean = true,
 ) {
@@ -55,8 +57,22 @@ internal const val RECENT_POINT_LIMIT = 50
     }
     val visiblePoints = remember(visibleDays) { visibleDays.flatMap(DayGroup::points) }
     val routePaths = remember(days, selectedDayIdx) { visibleRoutePaths(days, selectedDayIdx) }
-    val routeLimit = remember(routePaths) {
-        routePointBudget(routePaths.asSequence().flatMap { it.points.asSequence() }.asIterable())
+    val detailViewport = visibleViewport.takeIf { visibleZoom >= DETAIL_ROUTE_ZOOM }
+    val renderedRoutePaths = remember(routePaths, detailViewport) {
+        detailViewport?.let { routePathsInViewport(routePaths, it) } ?: routePaths
+    }
+    val routeLimit = remember(renderedRoutePaths, detailViewport) {
+        if (detailViewport == null) {
+            routePointBudget(renderedRoutePaths.asSequence()
+                .flatMap { it.points.asSequence() }.asIterable())
+        } else {
+            minOf(MAX_DETAIL_ROUTE_POINTS, renderedRoutePaths.sumOf { it.points.size })
+        }
+    }
+    val autoPointSpacingDp = autoPointSpacingDpForZoom(visibleZoom)
+    val autoPointLimit = autoPointLimitForZoom(visibleZoom)
+    val dayIndexByDate = remember(days) {
+        days.mapIndexed { index, day -> day.date to index }.toMap()
     }
     val thumbnailRequests = if (markerPresentation.checkinStyle == CheckinMarkerStyle.CARD) {
         visibleThumbnailRequests(
@@ -112,11 +128,11 @@ internal const val RECENT_POINT_LIMIT = 50
         val map = view.map
         map.uiSettings.isZoomControlsEnabled = false
         if (overlays.routeDays !== days || overlays.routeIndex != selectedDayIdx ||
-            overlays.routeLimit != routeLimit) {
+            overlays.routeLimit != routeLimit || overlays.routeViewport != detailViewport) {
             overlays.polylines.forEach(Polyline::remove)
             overlays.polylines.clear()
-            val pathLimits = routePathPointLimits(routePaths, routeLimit)
-            routePaths.forEachIndexed { index, path ->
+            val pathLimits = routePathPointLimits(renderedRoutePaths, routeLimit)
+            renderedRoutePaths.forEachIndexed { index, path ->
                 val limit = pathLimits[index]
                 val points = sampledRoutePoints(path.points, limit).map { LatLng(it.lat, it.lon) }
                 if (points.size >= 2) overlays.polylines += map.addPolyline(
@@ -125,17 +141,26 @@ internal const val RECENT_POINT_LIMIT = 50
             overlays.routeDays = days
             overlays.routeIndex = selectedDayIdx
             overlays.routeLimit = routeLimit
+            overlays.routeViewport = detailViewport
         }
-        val hasPoints = visibleDays.any { it.points.isNotEmpty() }
-        if (cameraMemory.selectedDayIdx != selectedDayIdx || !cameraMemory.hadPoints && hasPoints) {
+        val hasPoints = visiblePoints.isNotEmpty()
+        if (cameraMemory.selectedDayIdx != selectedDayIdx ||
+            cameraMemory.showFullRoute != showFullRoute ||
+            !cameraMemory.hadPoints && hasPoints) {
             cameraMemory.selectedDayIdx = selectedDayIdx
-            animateToPoints(map, cameraPointsForSelection(visiblePoints, selectedDayIdx, current))
+            cameraMemory.showFullRoute = showFullRoute
+            val cameraPoints = when {
+                selectedDayIdx in days.indices || showFullRoute -> visiblePoints
+                else -> cameraPointsNearCurrent(visiblePoints, current)
+            }
+            animateToPoints(map, cameraPoints)
         }
         cameraMemory.hadPoints = hasPoints
         if (overlays.markerDays !== days || overlays.markerIndex != selectedDayIdx ||
             overlays.markerPresentation != markerPresentation || overlays.viewport != visibleViewport ||
             overlays.thumbnails !== thumbnails || overlays.current != current ||
             overlays.avatar !== currentAvatar || overlays.latest != latest ||
+            overlays.autoPointSpacingDp != autoPointSpacingDp || overlays.autoPointLimit != autoPointLimit ||
             overlays.showEndpoints != showEndpoints || overlays.showRouteEnd != showRouteEnd) {
         overlays.markers.forEach(Marker::remove)
         overlays.circles.forEach(Circle::remove)
@@ -194,42 +219,42 @@ internal const val RECENT_POINT_LIMIT = 50
         } else emptyList()
         val visibleAutoIds = nonOverlappingAutoMarkerIndices(
             autoCandidates.map { map.projection.toScreenLocation(LatLng(it.lat, it.lon)).toMarkerScreenPoint() },
-            minSpacingPx = 16f * context.resources.displayMetrics.density,
+            minSpacingPx = autoPointSpacingDp * context.resources.displayMetrics.density,
+            maxMarkers = autoPointLimit,
         ).mapTo(mutableSetOf()) { autoCandidates[it].id }
-        visibleDays.forEach { day ->
-            val index = days.indexOfFirst { it.date == day.date }.coerceAtLeast(0)
-            day.points.forEach pointLoop@ { point ->
-                if (point.id !in visibleCheckinIds && point.id !in visibleAutoIds) return@pointLoop
-                val position = LatLng(point.lat, point.lon)
-                if (point.isCheckin && point.id in visibleCheckinIds) {
-                    val thumbnail = point.images.firstOrNull()?.let { path ->
-                        thumbnails[ThumbnailRequest(point.id, path)]
-                    }
-                    val icon = when (markerPresentation.checkinStyle) {
-                        CheckinMarkerStyle.HIDDEN -> null
-                        CheckinMarkerStyle.COMPACT -> createCompactCheckinMarkerBitmap(context)
-                        CheckinMarkerStyle.CARD -> createCheckinMarkerBitmap(
-                            context, point.name, thumbnail, markerPresentation.checkinScale)
-                    }
-                    if (icon == null) return@pointLoop
-                    val marker = map.addMarker(MarkerOptions().position(position).title(point.name ?: "旅途打卡")
-                        .icon(BitmapDescriptorFactory.fromBitmap(icon))
-                        .anchor(.5f, 1f))
-                    overlays.markers += marker
-                    pointLookup[marker.id] = point
-                } else if (!point.isCheckin && point.id in visibleAutoIds) {
-                    // 自动轨迹点：白底彩边圆圈（与 Web 分享页 CircleMarker 一致）
-                    val dayColorInt = dayColor(index).toInt()
-                    val marker = map.addMarker(MarkerOptions().position(position)
-                        .icon(BitmapDescriptorFactory.fromBitmap(
-                            autoDotCache.getOrPut(dayColorInt) {
-                                createAutoPointDotBitmap(context, dayColorInt)
-                            }))
-                        .anchor(.5f, .5f)
-                        .zIndex(1f))
-                    overlays.markers += marker
-                    pointLookup[marker.id] = point
+        val markerPoints = checkinCandidates.filter { it.id in visibleCheckinIds } +
+            autoCandidates.filter { it.id in visibleAutoIds }
+        markerPoints.forEach { point ->
+            val index = dayIndexByDate[point.time.toLocalDate()] ?: 0
+            val position = LatLng(point.lat, point.lon)
+            if (point.isCheckin && point.id in visibleCheckinIds) {
+                val thumbnail = point.images.firstOrNull()?.let { path ->
+                    thumbnails[ThumbnailRequest(point.id, path)]
                 }
+                val icon = when (markerPresentation.checkinStyle) {
+                    CheckinMarkerStyle.HIDDEN -> null
+                    CheckinMarkerStyle.COMPACT -> createCompactCheckinMarkerBitmap(context)
+                    CheckinMarkerStyle.CARD -> createCheckinMarkerBitmap(
+                        context, point.name, thumbnail, markerPresentation.checkinScale)
+                }
+                if (icon == null) return@forEach
+                val marker = map.addMarker(MarkerOptions().position(position).title(point.name ?: "旅途打卡")
+                    .icon(BitmapDescriptorFactory.fromBitmap(icon))
+                    .anchor(.5f, 1f))
+                overlays.markers += marker
+                pointLookup[marker.id] = point
+            } else if (!point.isCheckin && point.id in visibleAutoIds) {
+                // 自动轨迹点：白底彩边圆圈（与 Web 分享页 CircleMarker 一致）
+                val dayColorInt = dayColor(index).toInt()
+                val marker = map.addMarker(MarkerOptions().position(position)
+                    .icon(BitmapDescriptorFactory.fromBitmap(
+                        autoDotCache.getOrPut(dayColorInt) {
+                            createAutoPointDotBitmap(context, dayColorInt)
+                        }))
+                    .anchor(.5f, .5f)
+                    .zIndex(1f))
+                overlays.markers += marker
+                pointLookup[marker.id] = point
             }
         }
         endpointSpecs.filterNot { it.type in representedTypes }.forEach { spec ->
@@ -276,14 +301,16 @@ internal const val RECENT_POINT_LIMIT = 50
         overlays.current = current
         overlays.avatar = currentAvatar
         overlays.latest = latest
+        overlays.autoPointSpacingDp = autoPointSpacingDp
+        overlays.autoPointLimit = autoPointLimit
         overlays.showEndpoints = showEndpoints
         overlays.showRouteEnd = showRouteEnd
         }
         if (current != null && (!hasPoints && cameraMemory.focusRequest == -1 ||
                 focusCurrentRequest > cameraMemory.focusRequest)) {
             cameraMemory.focusRequest = focusCurrentRequest
-            if (selectedDayIdx == RECENT_SELECTION) {
-                animateToPoints(map, cameraPointsForSelection(visiblePoints, selectedDayIdx, current))
+            if (selectedDayIdx == ALL_DAYS_SELECTION) {
+                animateToPoints(map, cameraPointsNearCurrent(visiblePoints, current))
             } else {
                 map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(current.lat, current.lon), 16f))
             }
@@ -320,6 +347,7 @@ private fun animateToPoints(map: AMap, points: List<PointLite>) {
 
 private class MapCameraMemory(
     var selectedDayIdx: Int? = null,
+    var showFullRoute: Boolean? = null,
     var focusRequest: Int = -1,
     var hadPoints: Boolean = false,
 )
@@ -328,6 +356,7 @@ private class MapOverlays {
     var routeDays: List<DayGroup>? = null
     var routeIndex = -2
     var routeLimit = 0
+    var routeViewport: MapViewport? = null
     val polylines = mutableListOf<Polyline>()
     var markerDays: List<DayGroup>? = null
     var markerIndex = -2
@@ -337,6 +366,8 @@ private class MapOverlays {
     var current: PointLite? = null
     var avatar: Bitmap? = null
     var latest: PointLite? = null
+    var autoPointSpacingDp = 0f
+    var autoPointLimit = 0
     var showEndpoints = false
     var showRouteEnd = false
     var listenerMap: AMap? = null
@@ -351,32 +382,27 @@ internal fun visibleDaysForSelection(
     days: List<DayGroup>,
     selectedDayIdx: Int,
 ): List<DayGroup> = when {
-    selectedDayIdx == RECENT_SELECTION -> recentDays(days)
     selectedDayIdx in days.indices -> listOf(days[selectedDayIdx])
     else -> days
 }
 
-private fun recentDays(days: List<DayGroup>): List<DayGroup> {
-    val recent = ArrayList<PointLite>(RECENT_POINT_LIMIT)
-    outer@ for (day in days.asReversed()) {
-        for (point in day.points.asReversed()) {
-            recent += point
-            if (recent.size == RECENT_POINT_LIMIT) break@outer
-        }
-    }
-    return recent.sortedBy(PointLite::time)
-        .groupBy { it.time.toLocalDate() }
-        .map { (date, points) -> DayGroup(date, points) }
-}
-
-internal fun cameraPointsForSelection(
-    visiblePoints: List<PointLite>,
-    selectedDayIdx: Int,
+internal fun cameraPointsNearCurrent(
+    points: List<PointLite>,
     current: PointLite?,
-): List<PointLite> = if (selectedDayIdx == RECENT_SELECTION && current != null) {
-    visiblePoints + current
-} else {
-    visiblePoints
+    limit: Int = INITIAL_CAMERA_POINT_LIMIT,
+): List<PointLite> {
+    if (points.isEmpty()) return listOfNotNull(current)
+    if (current == null) return points.takeLast(limit)
+    val anchor = current
+    val closestIndex = points.indices.minBy { index ->
+        val point = points[index]
+        RouteGeometry.distanceMeters(anchor.lat, anchor.lon, point.lat, point.lon)
+    }
+    val windowSize = minOf(limit, points.size)
+    val windowStart = (closestIndex - windowSize / 2)
+        .coerceIn(0, points.size - windowSize)
+    val window = points.subList(windowStart, windowStart + windowSize)
+    return window + current
 }
 
 internal fun visibleRoutePaths(days: List<DayGroup>, selectedDayIdx: Int): List<RoutePath> {
@@ -390,6 +416,25 @@ internal fun visibleRoutePaths(days: List<DayGroup>, selectedDayIdx: Int): List<
         val connected = previousEnd?.let { listOf(it) + points } ?: points
         previousEnd = points.last()
         RoutePath(days.indexOfFirst { it.date == day.date }.coerceAtLeast(0), connected)
+    }
+}
+
+internal fun routePathsInViewport(
+    paths: List<RoutePath>,
+    viewport: MapViewport,
+): List<RoutePath> = buildList {
+    paths.forEach { path ->
+        var index = 0
+        while (index < path.points.size) {
+            while (index < path.points.size && !viewport.contains(path.points[index])) index++
+            if (index == path.points.size) break
+            val firstInside = index
+            while (index < path.points.size && viewport.contains(path.points[index])) index++
+            val start = maxOf(0, firstInside - 1)
+            val endExclusive = minOf(path.points.size, index + 1)
+            val segment = path.points.subList(start, endExclusive)
+            if (segment.size >= 2) add(RoutePath(path.dayIndex, segment))
+        }
     }
 }
 
@@ -480,7 +525,7 @@ internal fun routePathPointLimits(paths: List<RoutePath>, totalLimit: Int): List
 internal fun nonOverlappingAutoMarkerIndices(
     points: List<MarkerScreenPoint>,
     minSpacingPx: Float,
-    maxMarkers: Int = 240,
+    maxMarkers: Int = Int.MAX_VALUE,
 ): List<Int> {
     val occupied = mutableMapOf<Pair<Int, Int>, MutableList<MarkerScreenPoint>>()
     val result = mutableListOf<Int>()
@@ -500,6 +545,18 @@ internal fun nonOverlappingAutoMarkerIndices(
         }
     }
     return result
+}
+
+internal fun autoPointSpacingDpForZoom(zoom: Float): Float = when {
+    zoom < 16f -> 16f
+    zoom < 18f -> 8f
+    else -> 4f
+}
+
+internal fun autoPointLimitForZoom(zoom: Float): Int = when {
+    zoom < 16f -> 240
+    zoom < 18f -> 1_000
+    else -> 3_000
 }
 
 private data class EndpointSpec(

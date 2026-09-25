@@ -26,7 +26,7 @@ import com.niutrip.app.service.LocResult
 import com.niutrip.app.service.LocationSource
 import com.niutrip.app.ui.checkin.ImagePreparer
 import com.niutrip.app.ui.checkin.PreparedImage
-import com.niutrip.app.ui.detail.map.RECENT_SELECTION
+import com.niutrip.app.ui.detail.map.ALL_DAYS_SELECTION
 import android.net.Uri
 import okhttp3.MultipartBody
 import java.io.File
@@ -64,8 +64,18 @@ class TrackDetailViewModelTest {
     private fun pointDto(id: String) = PointDto(point_id = id, longitude = 100.0, latitude = 30.0,
         point_time = "2026-09-11T10:00:00", point_source = "MANUAL")
 
-    @Test fun `detail defaults to recent points`() {
-        assertEquals(RECENT_SELECTION, DetailState().selectedDay)
+    @Test fun `detail defaults to full data with current area camera`() {
+        val state = DetailState()
+        assertEquals(ALL_DAYS_SELECTION, state.selectedDay)
+        assertFalse(state.fullRouteFocused)
+    }
+
+    @Test fun `selecting full route requests panorama focus`() {
+        val vm = vm(emptyList(), LocationSource { LocResult.Failure("unused") })
+
+        vm.selectDay(ALL_DAYS_SELECTION)
+
+        assertTrue(vm.state.value.fullRouteFocused)
     }
 
     @Test fun `cloud point wins when a pending point has the same id`() {
