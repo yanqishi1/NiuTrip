@@ -27,15 +27,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
+import java.time.LocalDate
 
 data class DetailState(
     val loading: Boolean = true,
     val track: TrackDto? = null,
     val days: List<DayGroup> = emptyList(),
     val points: List<PointDto> = emptyList(),
+    /** 本地已有全量点（旧版本同步缓存或老服务端回退），此时无需视口拉细点。 */
     val pointsLoaded: Boolean = false,
-    val pointsLoading: Boolean = false,
-    val pointsError: String? = null,
+    /** 视口 LOD：高缩放级别按 bbox 拉到的局部细点（按日合并去重），渲染时按日期替换粗线。 */
+    val detailDays: Map<LocalDate, List<PointLite>> = emptyMap(),
     val totalDistanceMeters: Double = 0.0,
     val selectedDay: Int = ALL_DAYS_SELECTION,
     val fullRouteFocused: Boolean = false,
@@ -62,6 +64,16 @@ class TrackDetailViewModel(
     private var viewRequestSent = false
     private var fullPointsJob: Job? = null
 
+    // 视口 LOD：bbox 片段缓存与在途请求（详情页只拉 overview 粗线，细点按可视区域取）
+    private val detailCache = DetailSegmentCache()
+    private var detailJob: Job? = null
+
+    // 里程基准：粗线是抽稀的，不能按已加载点整段重算——
+    // 服务端总里程 + 进入页面后实时记录的增量腿
+    private var serverDistanceMeters = 0.0
+    private var liveLegsMeters = 0.0
+    private var lastKnownPoint: PointLite? = null
+
     init {
         // 本地入库即更新地图和里程；上传成功后不再整页回拉云端点。
         viewModelScope.launch {
@@ -77,6 +89,7 @@ class TrackDetailViewModel(
     // 静默刷新：已有内容时不闪全屏 loading；失败时保留旧内容（只有首屏失败才显示错误页）
     fun load() = viewModelScope.launch {
         fullPointsJob?.cancel()
+        detailJob?.cancel()
         _state.update { it.copy(fullRouteFocused = false) }
         locateCurrent(focus = true, showError = false, recordPoint = false)
         if (_state.value.track == null) {
@@ -102,54 +115,96 @@ class TrackDetailViewModel(
             }
             val track = overview?.track ?: repository.detail(id, recordView = shouldRecordView)
             detailLoaded = true
-            if (overview == null && !hasLocalBaseline) {
-                applyFullPoints(track, mergeTrackPoints(repository.points(id), syncRepository.localPoints(id)))
-            } else {
-                if (overview == null) {
-                    _state.update { it.copy(
-                        loading = false,
-                        error = null,
-                        track = track,
-                        pointsLoading = true,
-                        pointsError = null,
-                    ) }
+            if (overview == null) {
+                // 老服务端（无 overview）：退回详情 + 全量分页拉点，行为同旧版本。
+                if (hasLocalBaseline) {
+                    _state.update { it.copy(loading = false, error = null, track = track) }
+                    fullPointsJob = viewModelScope.launch {
+                        try {
+                            val fetched = mergeTrackPoints(repository.points(id), syncRepository.localPoints(id))
+                            val points = mergePointDtos(_state.value.points, fetched)
+                            val prepared = withContext(Dispatchers.Default) { preparePoints(points) }
+                            applyFullPoints(track, points, prepared)
+                        } catch (error: CancellationException) {
+                            throw error
+                        } catch (error: Throwable) {
+                            // 静默：本地基线仍是完整内容
+                        }
+                    }
                 } else {
-                    val previewDays = overview.days.mapNotNull { day ->
-                        val date = runCatching { java.time.LocalDate.parse(day.date) }.getOrNull()
-                        date?.let { DayGroup(it, day.points.mapNotNull(PointDto::toLite)) }
-                    }
-                    val previewLatest = previewDays.lastOrNull()?.points?.lastOrNull()
-                        ?.takeIf { track.track_status == "RECORDING" && track.track_record_mode == "AUTO" }
-                        ?.copy(id = "current")
-                    _state.update { old ->
-                        old.copy(loading = false, error = null, track = track,
-                            days = if (old.pointsLoaded) old.days else previewDays,
-                            totalDistanceMeters = if (old.pointsLoaded) old.totalDistanceMeters
-                                else overview.total_distance_meters,
-                            current = if (old.currentIsDeviceLocation) old.current
-                                else newerCurrent(old.current, previewLatest),
-                            pointsLoading = true, pointsError = null)
-                    }
+                    applyFullPoints(track, mergeTrackPoints(
+                        repository.points(id), syncRepository.localPoints(id)))
                 }
-                fullPointsJob = viewModelScope.launch {
-                    try {
-                        val fetched = mergeTrackPoints(repository.points(id), syncRepository.localPoints(id))
-                        val points = mergePointDtos(_state.value.points, fetched)
-                        val prepared = withContext(Dispatchers.Default) { preparePoints(points) }
-                        applyFullPoints(track, points, prepared)
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Throwable) {
-                        _state.update { it.copy(pointsLoading = false,
-                            pointsError = error.message ?: "轨迹点加载失败") }
-                    }
-                }
+            } else {
+                applyOverview(track, overview.days.flatMap { it.points },
+                    overview.total_distance_meters)
             }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
             if (shouldRecordView && !detailLoaded) viewRequestSent = false
             if (_state.value.track == null) _state.update { it.copy(loading = false, error = error.message ?: "加载失败") }
+        }
+    }
+
+    /** overview 粗线（含完整 MANUAL 打卡点）+ 本地未同步点；里程用服务端精确值。 */
+    private suspend fun applyOverview(
+        track: TrackDto,
+        overviewPoints: List<PointDto>,
+        distanceMeters: Double,
+        keepCurrent: Boolean = false,
+    ) {
+        val points = mergeTrackPoints(overviewPoints, syncRepository.localPoints(id))
+        val litePoints = points.mapNotNull(PointDto::toLite)
+        serverDistanceMeters = distanceMeters
+        liveLegsMeters = 0.0
+        lastKnownPoint = litePoints.maxByOrNull(PointLite::time)
+        val recordedFallback = lastKnownPoint
+            ?.takeIf { track.track_status == "RECORDING" && track.track_record_mode == "AUTO" }
+            ?.copy(id = "current")
+        _state.update { old ->
+            old.copy(loading = false, error = null,
+                track = track,
+                days = DayGrouper.group(litePoints), points = points, pointsLoaded = false,
+                totalDistanceMeters = serverDistanceMeters + liveLegsMeters,
+                current = if (old.currentIsDeviceLocation || keepCurrent) old.current
+                    else newerCurrent(old.current, recordedFallback))
+        }
+    }
+
+    /** 点位编辑/删除后静默刷新 overview，校正里程与统计。 */
+    private fun refreshOverviewAfterEdit() = viewModelScope.launch {
+        try {
+            val overview = repository.overview(id)
+            applyOverview(overview.track, overview.days.flatMap { it.points },
+                overview.total_distance_meters, keepCurrent = true)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            // 静默失败：本地视图已是编辑后的近似值，下次进页/刷新自然校正
+        }
+    }
+
+    /**
+     * 视口 LOD（地图相机静止时回调）：高缩放级别按可视区域外扩半屏拉局部细点；
+     * 已有片段覆盖则免拉取；失败静默，下次相机静止重试。
+     */
+    fun onCameraIdle(bbox: GeoBbox, zoom: Float) {
+        if (_state.value.pointsLoaded) return      // 本地已有全量
+        if (zoom < DETAIL_ZOOM) return             // 阈值与地图渲染（细线/圆点）一致
+        val want = bbox.padded(DETAIL_BBOX_PADDING)
+        if (detailCache.covers(want)) return
+        detailJob?.cancel()
+        detailJob = viewModelScope.launch {
+            try {
+                val fetched = repository.pointsInBbox(id, want)
+                detailCache.add(want, fetched.mapNotNull(PointDto::toLite))
+                _state.update { it.copy(detailDays = detailCache.mergedDays()) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                // 保留粗线；下一次相机静止重试
+            }
         }
     }
 
@@ -168,9 +223,8 @@ class TrackDetailViewModel(
             ?.copy(id = "current")
         _state.update { old ->
             old.copy(loading = false, error = null,
-                track = if (old.pointsLoading) old.track ?: track else track,
+                track = if (old.pointsLoaded) old.track ?: track else track,
                 days = prepared.days, points = points, pointsLoaded = true,
-                pointsLoading = false, pointsError = null,
                 totalDistanceMeters = prepared.distance,
                 current = if (old.currentIsDeviceLocation) old.current
                     else newerCurrent(old.current, recordedFallback))
@@ -194,6 +248,16 @@ class TrackDetailViewModel(
                 days = DayGrouper.group(litePoints),
                 totalDistanceMeters = RouteGeometry.totalDistanceMeters(litePoints),
             )
+        }
+        if (!_state.value.pointsLoaded) {
+            // 粗线路径：总里程 = 服务端值 + 实时增量腿（上一已知点 → 新点）
+            val fresh = point.toPointDto().toLite() ?: return
+            val known = lastKnownPoint
+            if (known != null && _state.value.points.none { it.point_id == point.pointId }) {
+                liveLegsMeters += RouteGeometry.distanceMeters(known.lat, known.lon, fresh.lat, fresh.lon)
+            }
+            lastKnownPoint = fresh
+            _state.update { it.copy(totalDistanceMeters = serverDistanceMeters + liveLegsMeters) }
         }
     }
 
@@ -255,12 +319,12 @@ class TrackDetailViewModel(
             repository.patch(id, TrackPatchIn(track_status = status))
         }.onSuccess { track ->
             _state.update { it.copy(track = track, changingStatus = false) }; onChanged(track)
-        }.onFailure { error -> _state.update { it.copy(error = error.message, changingStatus = false) } }
+        }.onFailure { error -> _state.update { it.copy(error = error.message ?: "状态更新失败", changingStatus = false) } }
     }
     fun rename(name: String) = viewModelScope.launch {
         if (name.isBlank()) return@launch
         runCatching { repository.patch(id, TrackPatchIn(track_name = name.trim())) }.onSuccess { value -> _state.update { it.copy(track = value) } }
-            .onFailure { error -> _state.update { it.copy(error = error.message) } }
+            .onFailure { error -> _state.update { it.copy(error = error.message ?: "重命名失败") } }
     }
     fun updateImage(uri: Uri) = viewModelScope.launch {
         _state.update { it.copy(updatingImage = true, error = null) }
@@ -344,10 +408,17 @@ class TrackDetailViewModel(
         }.onSuccess { updated ->
             _state.update { old ->
                 val points = old.points.map { if (it.point_id == updated.point_id) updated else it }
-                old.copy(points = points, days = DayGrouper.group(points.mapNotNull(PointDto::toLite)),
-                    totalDistanceMeters = RouteGeometry.totalDistanceMeters(points.mapNotNull(PointDto::toLite)),
+                val litePoints = points.mapNotNull(PointDto::toLite)
+                old.copy(points = points, days = DayGrouper.group(litePoints),
+                    // 视口细点里的同 id 点同步替换，避免已拉区域显示旧内容
+                    detailDays = old.detailDays.mapValues { (_, dayPoints) ->
+                        dayPoints.map { point ->
+                            if (point.id == updated.point_id) updated.toLite() ?: point else point
+                        }
+                    },
                     updatingPoint = false)
             }
+            refreshOverviewAfterEdit()
             onDone()
         }.onFailure { error ->
             _state.update { it.copy(updatingPoint = false, error = error.message ?: "轨迹点更新失败") }
@@ -366,13 +437,21 @@ class TrackDetailViewModel(
                 old.copy(
                     points = points,
                     days = days,
-                    totalDistanceMeters = RouteGeometry.totalDistanceMeters(litePoints),
+                    detailDays = if (old.detailDays.isEmpty()) old.detailDays else {
+                        old.detailDays.mapValues { (_, dayPoints) ->
+                            dayPoints.filterNot { it.id == pointId }
+                        }.filterValues { it.isNotEmpty() }
+                    },
+                    totalDistanceMeters = if (old.pointsLoaded)
+                        RouteGeometry.totalDistanceMeters(litePoints)
+                    else old.totalDistanceMeters,
                     selectedDay = old.selectedDay.takeIf {
                         it == ALL_DAYS_SELECTION || it in days.indices
                     } ?: ALL_DAYS_SELECTION,
                     updatingPoint = false,
                 )
             }
+            if (!_state.value.pointsLoaded) refreshOverviewAfterEdit()
             onDone()
         }.onFailure { error ->
             _state.update { it.copy(updatingPoint = false, error = error.message ?: "轨迹点删除失败") }

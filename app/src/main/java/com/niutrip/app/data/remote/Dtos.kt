@@ -118,8 +118,12 @@ import kotlinx.serialization.Serializable
     val days: Int,
     val view_count: Int = 0,
     val viewer_count: Int = 0,
+    /** 服务端按全量点计算的精确总里程（粗线是抽稀的，客户端累加会偏小）。 */
+    val distance_meters: Double? = null,
 )
 @Serializable data class ShareDayDto(val date: String, val points: List<PointDto>)
+@Serializable data class BboxPointsDto(val results: List<PointDto> = emptyList())
+@Serializable data class SharePointsDto(val days: List<ShareDayDto> = emptyList())
 @Serializable data class TrackOverviewDto(
     val track: TrackDto,
     val total_distance_meters: Double,

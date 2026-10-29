@@ -33,6 +33,8 @@ open class StubApi : ApiService {
     override suspend fun share(id: String, body: ShareIn): ShareOut = TODO()
     override suspend fun revokeShare(id: String): Response<Unit> = TODO()
     override suspend fun inspectShare(token: String): ShareInspectOut = TODO()
+    override suspend fun pointsInBbox(id: String, bbox: String): BboxPointsDto = TODO()
     override suspend fun shareView(token: String): ShareDataDto = TODO()
     override suspend fun shareSave(token: String): ShareDataDto = TODO()
+    override suspend fun sharePoints(token: String, bbox: String): SharePointsDto = TODO()
 }

@@ -16,7 +16,9 @@ import com.amap.api.maps.CameraUpdateFactory
 import com.amap.api.maps.TextureMapView
 import com.amap.api.maps.model.*
 import com.niutrip.app.R
+import com.niutrip.app.core.DETAIL_ZOOM
 import com.niutrip.app.core.DayGroup
+import com.niutrip.app.core.GeoBbox
 import com.niutrip.app.core.PointLite
 import com.niutrip.app.core.RouteGeometry
 import com.niutrip.app.core.dayColor
@@ -24,11 +26,11 @@ import com.niutrip.app.ui.common.absoluteMediaUrl
 import coil.imageLoader
 import coil.request.ImageRequest
 import coil.request.SuccessResult
+import java.time.LocalDate
 import kotlin.math.floor
 
 internal const val ALL_DAYS_SELECTION = -1
 internal const val INITIAL_CAMERA_POINT_LIMIT = 50
-internal const val DETAIL_ROUTE_ZOOM = 15f
 internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
 
 @Composable fun AMapView(
@@ -43,6 +45,10 @@ internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
     showFullRoute: Boolean = true,
     showEndpoints: Boolean = true,
     showRouteEnd: Boolean = true,
+    /** 视口 LOD 局部细点（按日）；zoom ≥ [DETAIL_ZOOM] 时按日期替换粗线，缩小自动回退。 */
+    detailDays: Map<LocalDate, List<PointLite>> = emptyMap(),
+    /** 相机静止（缩放/平移结束）回调，用于按可视区域拉取细点。 */
+    onCameraIdle: ((GeoBbox, Float) -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -52,12 +58,23 @@ internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
     var visibleViewport by remember { mutableStateOf<MapViewport?>(null) }
     var visibleZoom by remember { mutableFloatStateOf(mapView.map.cameraPosition.zoom) }
     val markerPresentation = markerPresentationForZoom(visibleZoom)
-    val visibleDays = remember(days, selectedDayIdx) {
-        visibleDaysForSelection(days, selectedDayIdx)
+    // 视口 LOD：高缩放且有局部数据时按日期整组替换粗线（未覆盖的日期仍画粗线）
+    val detailActive = detailDays.isNotEmpty() && visibleZoom >= DETAIL_ZOOM
+    val drawDays = remember(days, detailDays, detailActive) {
+        if (!detailActive) days
+        else days.map { day -> detailDays[day.date]?.let { day.copy(points = it) } ?: day }
+    }
+    val visibleDays = remember(drawDays, selectedDayIdx) {
+        visibleDaysForSelection(drawDays, selectedDayIdx)
     }
     val visiblePoints = remember(visibleDays) { visibleDays.flatMap(DayGroup::points) }
-    val routePaths = remember(days, selectedDayIdx) { visibleRoutePaths(days, selectedDayIdx) }
-    val detailViewport = visibleViewport.takeIf { visibleZoom >= DETAIL_ROUTE_ZOOM }
+    val routePaths = remember(drawDays, selectedDayIdx) { visibleRoutePaths(drawDays, selectedDayIdx) }
+    // 起终点 pin / fitView / 最新位置恒用全局（粗线）数据——端点可能在已拉区域之外
+    val coarseVisibleDays = remember(days, selectedDayIdx) {
+        visibleDaysForSelection(days, selectedDayIdx)
+    }
+    val coarsePoints = remember(coarseVisibleDays) { coarseVisibleDays.flatMap(DayGroup::points) }
+    val detailViewport = visibleViewport.takeIf { visibleZoom >= DETAIL_ZOOM }
     val renderedRoutePaths = remember(routePaths, detailViewport) {
         detailViewport?.let { routePathsInViewport(routePaths, it) } ?: routePaths
     }
@@ -127,7 +144,7 @@ internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
     AndroidView(factory = { mapView }, modifier = modifier) { view ->
         val map = view.map
         map.uiSettings.isZoomControlsEnabled = false
-        if (overlays.routeDays !== days || overlays.routeIndex != selectedDayIdx ||
+        if (overlays.routeDays !== drawDays || overlays.routeIndex != selectedDayIdx ||
             overlays.routeLimit != routeLimit || overlays.routeViewport != detailViewport) {
             overlays.polylines.forEach(Polyline::remove)
             overlays.polylines.clear()
@@ -138,25 +155,25 @@ internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
                 if (points.size >= 2) overlays.polylines += map.addPolyline(
                     PolylineOptions().addAll(points).width(10f).color(dayColor(path.dayIndex).toInt()))
             }
-            overlays.routeDays = days
+            overlays.routeDays = drawDays
             overlays.routeIndex = selectedDayIdx
             overlays.routeLimit = routeLimit
             overlays.routeViewport = detailViewport
         }
-        val hasPoints = visiblePoints.isNotEmpty()
+        val hasPoints = coarsePoints.isNotEmpty()
         if (cameraMemory.selectedDayIdx != selectedDayIdx ||
             cameraMemory.showFullRoute != showFullRoute ||
             !cameraMemory.hadPoints && hasPoints) {
             cameraMemory.selectedDayIdx = selectedDayIdx
             cameraMemory.showFullRoute = showFullRoute
             val cameraPoints = when {
-                selectedDayIdx in days.indices || showFullRoute -> visiblePoints
-                else -> cameraPointsNearCurrent(visiblePoints, current)
+                selectedDayIdx in days.indices || showFullRoute -> coarsePoints
+                else -> cameraPointsNearCurrent(coarsePoints, current)
             }
             animateToPoints(map, cameraPoints)
         }
         cameraMemory.hadPoints = hasPoints
-        if (overlays.markerDays !== days || overlays.markerIndex != selectedDayIdx ||
+        if (overlays.markerDays !== drawDays || overlays.markerIndex != selectedDayIdx ||
             overlays.markerPresentation != markerPresentation || overlays.viewport != visibleViewport ||
             overlays.thumbnails !== thumbnails || overlays.current != current ||
             overlays.avatar !== currentAvatar || overlays.latest != latest ||
@@ -169,7 +186,7 @@ internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
         overlays.pointLookup.clear()
         val pointLookup = overlays.pointLookup
         val endpointSpecs = if (showEndpoints) {
-            RouteGeometry.endpoints(visibleDays)?.let { endpoints ->
+            RouteGeometry.endpoints(coarseVisibleDays)?.let { endpoints ->
                 routeEndpointTypes(
                     showRouteEnd = showRouteEnd,
                     samePoint = endpoints.start.id == endpoints.end.id,
@@ -272,7 +289,7 @@ internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
             overlays.markers += marker
             pointLookup[marker.id] = spec.point
         }
-        latest?.takeIf { visibleDays.any { day -> day.points.any { point -> point.id == it.id } } }?.let {
+        latest?.takeIf { coarseVisibleDays.any { day -> day.points.any { point -> point.id == it.id } } }?.let {
             val position = LatLng(it.lat, it.lon)
             overlays.circles += map.addCircle(CircleOptions().center(position).radius(35.0).fillColor(0x3300B96B).strokeColor(0xFF00B96B.toInt()).strokeWidth(3f))
         }
@@ -293,7 +310,7 @@ internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
                 pointLookup[marker.id] = it.point
             }
         }
-        overlays.markerDays = days
+        overlays.markerDays = drawDays
         overlays.markerIndex = selectedDayIdx
         overlays.markerPresentation = markerPresentation
         overlays.viewport = visibleViewport
@@ -310,7 +327,7 @@ internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
                 focusCurrentRequest > cameraMemory.focusRequest)) {
             cameraMemory.focusRequest = focusCurrentRequest
             if (selectedDayIdx == ALL_DAYS_SELECTION) {
-                animateToPoints(map, cameraPointsNearCurrent(visiblePoints, current))
+                animateToPoints(map, cameraPointsNearCurrent(coarsePoints, current))
             } else {
                 map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(current.lat, current.lon), 16f))
             }
@@ -319,13 +336,24 @@ internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
             overlays.pointLookup[marker.id]?.let(onPointClick)
             true
         }
+        overlays.cameraIdle = onCameraIdle
         if (overlays.listenerMap !== map) {
             overlays.listenerMap = map
             map.setOnCameraChangeListener(object : AMap.OnCameraChangeListener {
                 override fun onCameraChange(position: CameraPosition) = Unit
                 override fun onCameraChangeFinish(position: CameraPosition) {
-                    visibleViewport = map.projection.visibleRegion.latLngBounds.toMapViewport()
+                    val bounds = map.projection.visibleRegion.latLngBounds
+                    visibleViewport = bounds.toMapViewport()
                     visibleZoom = position.zoom
+                    overlays.cameraIdle?.invoke(
+                        GeoBbox(
+                            minLng = bounds.southwest.longitude,
+                            minLat = bounds.southwest.latitude,
+                            maxLng = bounds.northeast.longitude,
+                            maxLat = bounds.northeast.latitude,
+                        ),
+                        position.zoom,
+                    )
                 }
             })
         }
@@ -358,6 +386,8 @@ private class MapOverlays {
     var routeLimit = 0
     var routeViewport: MapViewport? = null
     val polylines = mutableListOf<Polyline>()
+    /** 相机静止回调（每次重组刷新，避免一次性 listener 持有过期闭包）。 */
+    var cameraIdle: ((GeoBbox, Float) -> Unit)? = null
     var markerDays: List<DayGroup>? = null
     var markerIndex = -2
     var markerPresentation: MarkerPresentation? = null

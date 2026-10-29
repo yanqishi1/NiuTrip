@@ -34,6 +34,11 @@ interface ApiService {
         @Query("page") page: Int = 1,
         @Query("page_size") pageSize: Int = 1000,
     ): PointsPage
+    /** 视口 LOD 局部拉点：bbox=minLng,minLat,maxLng,maxLat，不分页。 */
+    @GET("tracks/{trackId}/points/") suspend fun pointsInBbox(
+        @Path("trackId") id: String,
+        @Query("bbox") bbox: String,
+    ): BboxPointsDto
     @GET("tracks/{trackId}/point-changes/") suspend fun pointChanges(
         @Path("trackId") id: String,
         @Query("cursor") cursor: String? = null,
@@ -45,4 +50,9 @@ interface ApiService {
     @GET("share/{token}/inspect/") suspend fun inspectShare(@Path("token") token: String): ShareInspectOut
     @GET("share/{token}/") suspend fun shareView(@Path("token") token: String): ShareDataDto
     @POST("share/{token}/save/") suspend fun shareSave(@Path("token") token: String): ShareDataDto
+    /** 分享页视口 LOD 局部细点（结构同 shareView 的 days）。 */
+    @GET("share/{token}/points/") suspend fun sharePoints(
+        @Path("token") token: String,
+        @Query("bbox") bbox: String,
+    ): SharePointsDto
 }

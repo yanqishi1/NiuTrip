@@ -1,6 +1,8 @@
 package com.niutrip.app.ui.detail
 
 import android.app.Application
+import com.niutrip.app.core.GeoBbox
+import com.niutrip.app.core.PointLite
 import com.niutrip.app.data.local.FakePendingPointDao
 import com.niutrip.app.data.local.FakeCloudPointDao
 import com.niutrip.app.data.local.CloudPointEntity
@@ -9,6 +11,7 @@ import com.niutrip.app.data.local.PointSyncStateEntity
 import com.niutrip.app.data.local.TrackDao
 import com.niutrip.app.data.local.TrackEntity
 import com.niutrip.app.data.remote.ApiException
+import com.niutrip.app.data.remote.BboxPointsDto
 import com.niutrip.app.data.remote.PointDto
 import com.niutrip.app.data.remote.PointPatchIn
 import com.niutrip.app.data.remote.PointChangesDto
@@ -127,45 +130,124 @@ class TrackDetailViewModelTest {
         gate.complete(Unit)
     }
 
-    @Test fun `overview displays before full pages and retains exact preview stats`() = runTest {
-        val gate = CompletableDeferred<Unit>()
+    @Test fun `overview renders without downloading full points`() = runTest {
         val api = object : StubApi() {
             override suspend fun trackOverview(id: String, recordView: Boolean) = TrackOverviewDto(
                 trackDto().copy(point_count = 1306, checkin_count = 29), 321_000.0,
                 listOf(ShareDayDto("2026-09-11", listOf(pointDto("preview").copy(point_source = "AUTO")))))
-            override suspend fun points(id: String, page: Int): PointsPage {
-                gate.await()
-                return PointsPage(1, null, null, listOf(pointDto("full")))
+            override suspend fun points(id: String, page: Int): PointsPage =
+                error("overview 路径不得回退全量分页拉点")
+        }
+        val vm = vm(emptyList(), LocationSource { LocResult.Failure("unused") }, api)
+        vm.load()
+
+        assertFalse(vm.state.value.loading)
+        assertFalse(vm.state.value.pointsLoaded)          // 只有粗线，无全量点
+        assertEquals(1306, vm.state.value.track?.point_count)
+        assertEquals(321_000.0, vm.state.value.totalDistanceMeters, 0.0)  // 里程用服务端精确值
+        assertEquals("preview", vm.state.value.days.single().points.single().id)
+    }
+
+    @Test fun `camera idle below detail zoom does not fetch viewport points`() = runTest {
+        // pointsInBbox 未打桩（TODO()）：若被调用会直接炸掉测试
+        val api = overviewApi("preview")
+        val vm = vm(emptyList(), LocationSource { LocResult.Failure("unused") }, api)
+        vm.load()
+
+        vm.onCameraIdle(GeoBbox(100.0, 30.0, 100.1, 30.1), 13.5f)
+
+        assertTrue(vm.state.value.detailDays.isEmpty())
+    }
+
+    @Test fun `camera idle at detail zoom fetches padded viewport once and caches coverage`() = runTest {
+        val api = object : StubApi() {
+            override suspend fun trackOverview(id: String, recordView: Boolean) = overviewDto("preview")
+            override suspend fun pointsInBbox(id: String, bbox: String): BboxPointsDto {
+                fetchedBboxes += bbox
+                return BboxPointsDto(listOf(pointDto("detail1"), pointDto("detail2")))
+            }
+        }
+        val vm = vm(emptyList(), LocationSource { LocResult.Failure("unused") }, api)
+        vm.load()
+        fetchedBboxes.clear()
+
+        vm.onCameraIdle(GeoBbox(100.0, 30.0, 100.1, 30.1), 14.5f)
+        // 拉取范围 = 视口每边外扩半屏
+        assertEquals(listOf("99.95000,29.95000,100.15000,30.15000"), fetchedBboxes)
+        // 细点按日合入 detailDays，替换渲染用的粗线数据
+        assertEquals(listOf("detail1", "detail2"),
+            vm.state.value.detailDays.values.single().map(PointLite::id))
+        // 已覆盖区域内的再次静止（略小视口）不重复拉取
+        vm.onCameraIdle(GeoBbox(100.02, 30.0, 100.08, 30.1), 15f)
+        assertEquals(1, fetchedBboxes.size)
+        // 平移到未覆盖区域 → 再拉一次
+        vm.onCameraIdle(GeoBbox(100.4, 30.0, 100.5, 30.1), 15f)
+        assertEquals(2, fetchedBboxes.size)
+    }
+
+    @Test fun `bbox fetch failure is silent and retried on next idle`() = runTest {
+        var calls = 0
+        val api = object : StubApi() {
+            override suspend fun trackOverview(id: String, recordView: Boolean) = overviewDto("preview")
+            override suspend fun pointsInBbox(id: String, bbox: String): BboxPointsDto {
+                calls++
+                if (calls == 1) error("offline")
+                return BboxPointsDto(listOf(pointDto("detail1")))
             }
         }
         val vm = vm(emptyList(), LocationSource { LocResult.Failure("unused") }, api)
         vm.load()
 
-        assertFalse(vm.state.value.loading)
-        assertTrue(vm.state.value.pointsLoading)
-        assertFalse(vm.state.value.pointsLoaded)
-        assertEquals(1306, vm.state.value.track?.point_count)
-        assertEquals(321_000.0, vm.state.value.totalDistanceMeters, 0.0)
-        assertEquals("preview", vm.state.value.days.single().points.single().id)
+        vm.onCameraIdle(GeoBbox(100.0, 30.0, 100.1, 30.1), 15f)
+        assertTrue(vm.state.value.detailDays.isEmpty())    // 失败静默，粗线仍在
+        assertNull(vm.state.value.error)
 
-        gate.complete(Unit)
-        val loaded = withTimeout(5_000) { vm.state.first { it.pointsLoaded } }
-        assertEquals("full", loaded.days.single().points.single().id)
-        assertFalse(loaded.pointsLoading)
+        vm.onCameraIdle(GeoBbox(100.0, 30.0, 100.1, 30.1), 15f)   // 未入缓存 → 重试
+        assertEquals(2, calls)
+        assertEquals(listOf("detail1"),
+            vm.state.value.detailDays.values.single().map(PointLite::id))
     }
 
-    @Test fun `failed full pages leave overview visible and retryable`() = runTest {
-        val api = object : StubApi() {
-            override suspend fun trackOverview(id: String, recordView: Boolean) = TrackOverviewDto(
-                trackDto().copy(point_count = 1), 88.0,
-                listOf(ShareDayDto("2026-09-11", listOf(pointDto("preview")))))
-            override suspend fun points(id: String, page: Int): PointsPage = error("offline")
+    @Test fun `full local baseline skips viewport fetches`() = runTest {
+        var bboxCalls = 0
+        val track = trackDto().copy(point_count = 1)
+        val trackDao = object : TrackDao by FakeDao {
+            override suspend fun get(id: String) = TrackEntity.from(track)
         }
-        val vm = vm(emptyList(), LocationSource { LocResult.Failure("unused") }, api)
+        val pointCache = FakeCloudPointDao(
+            initialPoints = listOf(CloudPointEntity.from("t1", pointDto("cached"))),
+            initialStates = listOf(PointSyncStateEntity("t1", "cursor-1", true, "test-account")),
+        )
+        val api = object : StubApi() {
+            override suspend fun track(id: String, recordView: Boolean) = track
+            override suspend fun pointChanges(id: String, cursor: String?) =
+                PointChangesDto("cursor-2", false, emptyList())
+            override suspend fun pointsInBbox(id: String, bbox: String): BboxPointsDto {
+                bboxCalls++
+                return BboxPointsDto(emptyList())
+            }
+        }
+        val sync = SyncRepository(api, FakePendingPointDao())
+        val vm = TrackDetailViewModel(
+            "t1", TrackRepository(api, trackDao, pointCache),
+            LocationSource { LocResult.Failure("unused") }, sync,
+            ImagePreparer { error("unused") })
+
         vm.load()
-        assertFalse(vm.state.value.loading)
-        assertEquals("preview", vm.state.value.days.single().points.single().id)
-        assertEquals("offline", vm.state.value.pointsError)
+        // 缓存基线应用含一次 Default 线程跳转，先等它落地再触发相机静止
+        withTimeout(5_000) { vm.state.first { it.pointsLoaded } }
+        vm.onCameraIdle(GeoBbox(100.0, 30.0, 100.1, 30.1), 15f)
+
+        assertEquals(0, bboxCalls)                          // 本地全量在，无需按视口拉
+        assertTrue(vm.state.value.pointsLoaded)
+    }
+
+    private val fetchedBboxes = mutableListOf<String>()
+    private fun overviewDto(pointId: String) = TrackOverviewDto(
+        trackDto().copy(point_count = 1), 88.0,
+        listOf(ShareDayDto("2026-09-11", listOf(pointDto(pointId)))))
+    private fun overviewApi(pointId: String): StubApi = object : StubApi() {
+        override suspend fun trackOverview(id: String, recordView: Boolean) = overviewDto(pointId)
     }
 
     @Test fun `full point load requests large server pages`() = runTest {

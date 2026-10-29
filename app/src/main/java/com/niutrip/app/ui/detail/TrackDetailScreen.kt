@@ -122,12 +122,14 @@ import com.niutrip.app.ui.theme.*
                 selectedDayIdx = state.selectedDay,
                 latest = state.days.lastOrNull()?.points?.lastOrNull(),
                 modifier = Modifier.fillMaxSize(),
-                onPointClick = { if (state.pointsLoaded) selectedPointId = it.id },
+                onPointClick = { selectedPointId = it.id },
                 current = state.current,
                 currentAvatarUrl = currentUserAvatarUrl,
                 focusCurrentRequest = state.currentFocusRequest,
                 showFullRoute = state.fullRouteFocused,
                 showRouteEnd = state.track?.track_status == "FINISHED",
+                detailDays = state.detailDays,
+                onCameraIdle = viewModel::onCameraIdle,
             )
             TopAppBar(title = { Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(state.track?.track_name.orEmpty(), fontWeight = FontWeight.Bold)
@@ -194,13 +196,10 @@ import com.niutrip.app.ui.theme.*
                 }
                 Spacer(Modifier.height(12.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-                    Stat("${if (state.pointsLoaded) state.points.size else state.track?.point_count ?: 0}", "轨迹点")
-                    Stat("${if (state.pointsLoaded) state.points.count { it.point_source == "MANUAL" } else state.track?.checkin_count ?: 0}", "打卡")
+                    // 统计恒用服务端真值：本地只加载了粗线（抽稀）与局部细点，数点会偏小
+                    Stat("${state.track?.point_count ?: 0}", "轨迹点")
+                    Stat("${state.track?.checkin_count ?: 0}", "打卡")
                     Stat("${state.days.size}", "天数")
-                }
-                if (state.pointsLoading) LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
-                if (state.pointsError != null) TextButton(onClick = viewModel::load) {
-                    Text("轨迹点加载失败，重试")
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
@@ -317,7 +316,9 @@ import com.niutrip.app.ui.theme.*
         title = { Text("操作失败") }, text = { Text(state.error.orEmpty()) },
         confirmButton = { TextButton({ viewModel.dismissError() }) { Text("知道了") } })
     selectedPointId?.let { pointId ->
-        state.days.flatMap { it.points }.firstOrNull { it.id == pointId }?.let { point ->
+        // 点击的标记可能来自视口细点（比粗线同 id 点更完整），优先在细点里找
+        (state.detailDays.values.flatten() + state.days.flatMap { it.points })
+            .firstOrNull { it.id == pointId }?.let { point ->
             CheckinDetailSheet(
                 point = point,
                 editable = !readOnly,

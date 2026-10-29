@@ -62,6 +62,8 @@ import com.niutrip.app.ui.theme.*
                 currentAvatarUrl = currentUserAvatarUrl,
                 focusCurrentRequest = state.currentFocusRequest,
                 showRouteEnd = finished,
+                detailDays = state.detailDays,
+                onCameraIdle = viewModel::onCameraIdle,
             )
             TopAppBar(title = { Column { Text(state.data?.track?.track_name.orEmpty(), fontWeight = FontWeight.Bold); Text("${state.data?.track?.owner_username} 的轨迹${if (finished) " · 已结束" else ""}", color = Info, style = MaterialTheme.typography.bodySmall) } },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") } }, colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White.copy(.94f)))
@@ -89,7 +91,10 @@ import com.niutrip.app.ui.theme.*
                 ) {
                     Text("总里程", color = Muted, style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.weight(1f))
-                    Text(formatDistance(RouteGeometry.totalDistanceMeters(state.days.flatMap { it.points })),
+                    // 服务端按全量点计算（粗线抽稀后客户端累加会偏小）；老服务端无此字段则回退
+                    val serverDistance = state.data?.stats?.distance_meters
+                    Text(formatDistance(serverDistance
+                        ?: RouteGeometry.totalDistanceMeters(state.days.flatMap { it.points })),
                         color = Green700, style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold)
                 }
@@ -108,7 +113,8 @@ import com.niutrip.app.ui.theme.*
         }
     }
     selectedPointId?.let { pointId ->
-        state.days.flatMap { it.points }.firstOrNull { it.id == pointId }?.let { point ->
+        (state.detailDays.values.flatten() + state.days.flatMap { it.points })
+            .firstOrNull { it.id == pointId }?.let { point ->
             CheckinDetailSheet(
                 point = point,
                 editable = false,

@@ -1,5 +1,7 @@
 package com.niutrip.app.data.repo
 
+import com.niutrip.app.core.GeoBbox
+import com.niutrip.app.core.toQueryParam
 import com.niutrip.app.data.local.CloudPointDao
 import com.niutrip.app.data.local.CloudPointEntity
 import com.niutrip.app.data.local.PendingPointDao
@@ -76,6 +78,10 @@ class TrackRepository(
         apiCall { api.deleteReceivedShare(id) }
         pointCache?.clearTrack(id)
     }
+    /** 视口 LOD：拉取 bbox 内全精度点（不分页、服务端 ≤4000 抽稀兜底）。 */
+    suspend fun pointsInBbox(id: String, bbox: GeoBbox): List<PointDto> =
+        apiCall { api.pointsInBbox(id, bbox.toQueryParam()).results }
+
     suspend fun points(id: String): List<PointDto> {
         val cache = pointCache ?: return loadAllPoints(id)
         val ownerKey = accountKey() ?: error("当前账号信息不可用")
