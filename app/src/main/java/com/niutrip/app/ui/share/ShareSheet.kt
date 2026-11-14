@@ -43,30 +43,10 @@ import java.io.File
 private data class ShareModeOption(val id: String, val title: String, val detail: String)
 
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable fun ShareSheet(viewModel: ShareViewModel, onDismiss: () -> Unit) {
-    val state by viewModel.state.collectAsState(); val context = LocalContext.current
-    val captureWidth = minOf(440, LocalConfiguration.current.screenHeightDp - 180).coerceAtLeast(180).dp
-    val scope = rememberCoroutineScope()
-    var saving by remember { mutableStateOf(false) }
+@Composable fun ShareSheet(viewModel: ShareViewModel, onDismiss: () -> Unit, onEditImage: () -> Unit = onDismiss) {
+    val state by viewModel.state.collectAsState()
     LaunchedEffect(viewModel) { viewModel.load() }
     DisposableEffect(viewModel) { onDispose { viewModel.cancelImage() } }
-    fun save(file: File) {
-        if (saving) return
-        saving = true
-        scope.launch {
-            try {
-                withContext(Dispatchers.IO) { TrackImageFiles.saveToGallery(context.applicationContext, file) }
-                Toast.makeText(context, "图片已保存到相册", Toast.LENGTH_SHORT).show()
-            } catch (error: CancellationException) { throw error
-            } catch (error: Throwable) {
-                Toast.makeText(context, error.message ?: "保存失败", Toast.LENGTH_LONG).show()
-            } finally { saving = false }
-        }
-    }
-    val storagePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) (state.image as? ImageResult.Ready)?.file?.let(::save)
-        else Toast.makeText(context, "需要存储权限才能保存到相册", Toast.LENGTH_SHORT).show()
-    }
     ModalBottomSheet(onDismissRequest = { viewModel.cancelImage(); onDismiss() }, dragHandle = { BottomSheetDefaults.DragHandle() }) {
         Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("分享轨迹", style = MaterialTheme.typography.titleLarge)
@@ -86,46 +66,21 @@ private data class ShareModeOption(val id: String, val title: String, val detail
                         }
                     }
                     if (state.kind == ShareKind.IMAGE) {
-                        when (val image = state.image) {
-                            is ImageResult.Ready -> {
-                                AsyncImage(image.file, "全程轨迹图片", Modifier.fillMaxWidth().height(320.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedButton({
-                                        if (Build.VERSION.SDK_INT >= 29 || ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) save(image.file)
-                                        else storagePermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                                    }, Modifier.weight(1f), enabled = !saving) {
-                                        Icon(Icons.Default.Download, null); Spacer(Modifier.width(6.dp)); Text(if (saving) "保存中" else "保存到相册")
-                                    }
-                                    Button({
-                                        try { TrackImageFiles.share(context, image.file) }
-                                        catch (error: Exception) { Toast.makeText(context, "无法打开分享应用", Toast.LENGTH_SHORT).show() }
-                                    }, Modifier.weight(1f)) { Icon(Icons.Default.IosShare, null); Spacer(Modifier.width(6.dp)); Text("分享图片") }
-                                }
-                            }
-                            is ImageResult.Error -> Text(image.message, color = Danger)
-                            ImageResult.Loading -> {
-                                LinearProgressIndicator(Modifier.fillMaxWidth())
-                                TextButton(viewModel::cancelImage) { Text("取消") }
-                            }
-                            ImageResult.Idle -> Unit
+                        // 图片页打开全屏海报编辑器（plan §3.1）；关闭 BottomSheet 呈现，避免两个弹层抢占手势。
+                        Text("可编辑海报：默认地图背景，也可以从图库选择照片，自由调整路线与统计信息的位置。",
+                            color = Muted, style = MaterialTheme.typography.bodySmall)
+                        Button({
+                            viewModel.cancelImage()
+                            onEditImage()
+                        }, Modifier.fillMaxWidth().height(48.dp)) {
+                            Icon(Icons.Default.Image, null); Spacer(Modifier.width(6.dp)); Text("编辑分享图片")
                         }
-                        Button(viewModel::generateImage, Modifier.fillMaxWidth().height(48.dp), enabled = state.image !is ImageResult.Loading && !saving) {
-                            Icon(Icons.Default.Image, null); Spacer(Modifier.width(6.dp))
-                            Text(if (state.image is ImageResult.Ready) "重新生成图片" else "生成轨迹图片")
+                        when (val image = state.image) {
+                            is ImageResult.Error -> Text(image.message, color = Danger)
+                            ImageResult.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth())
+                            else -> Unit
                         }
                     } else LinkShareControls(state, viewModel)
-                }
-            }
-        }
-    }
-    state.imageData?.let { data ->
-        Dialog(onDismissRequest = viewModel::cancelImage, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-            Surface(shape = RoundedCornerShape(8.dp), modifier = Modifier.widthIn(max = captureWidth).fillMaxWidth(.92f)) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("生成轨迹图片", style = MaterialTheme.typography.titleMedium)
-                    TrackImageCapture(data, Modifier.fillMaxWidth().aspectRatio(1f), viewModel::imageReady, viewModel::imageFailed)
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                    TextButton(viewModel::cancelImage, Modifier.align(Alignment.End)) { Text("取消") }
                 }
             }
         }

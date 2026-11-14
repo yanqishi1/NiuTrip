@@ -29,6 +29,8 @@ import com.niutrip.app.ui.deeplink.IncomingShareDecision
 import com.niutrip.app.ui.deeplink.IncomingShareViewModel
 import com.niutrip.app.ui.profile.ProfileScreen
 import com.niutrip.app.ui.profile.ProfileViewModel
+import com.niutrip.app.ui.share.PosterEditorScreen
+import com.niutrip.app.ui.share.PosterEditorViewModel
 import com.niutrip.app.ui.share.ShareSheet
 import com.niutrip.app.ui.share.ShareViewModel
 import com.niutrip.app.ui.shareview.ShareViewScreen
@@ -46,9 +48,11 @@ object Routes {
     const val DETAIL = "trackDetail/{trackId}?readOnly={readOnly}"
     const val CHECKIN = "checkin/{trackId}"
     const val SHARE_VIEW = "shareView/{token}"
+    const val POSTER = "posterEditor/{trackId}"
     fun detail(id: String, readOnly: Boolean = false) = "trackDetail/$id?readOnly=$readOnly"
     fun checkin(id: String) = "checkin/$id"
     fun share(token: String) = "shareView/$token"
+    fun poster(id: String) = "posterEditor/$id"
 }
 
 private data class Tab(val label: String, val route: String, val icon: ImageVector)
@@ -121,6 +125,15 @@ private data class Tab(val label: String, val route: String, val icon: ImageVect
                 val vm: CheckinViewModel = viewModel(key = "checkin-$id", factory = ViewModelFactory { CheckinViewModel(id, container.api, container.locationSource, ImageCompressor(nav.context)) })
                 CheckinScreen(vm, nav::popBackStack) { nav.popBackStack() }
             }
+            composable(Routes.POSTER) { backStack ->
+                val id = backStack.arguments?.getString("trackId").orEmpty()
+                val vm: PosterEditorViewModel = viewModel(key = "poster-$id", factory = ViewModelFactory {
+                    PosterEditorViewModel(id, container.trackRepository, container.syncRepository,
+                        nav.context.applicationContext,
+                        resolvePlace = com.niutrip.app.ui.share.PosterPlaceResolver(nav.context.applicationContext)::resolve)
+                })
+                PosterEditorScreen(vm) { nav.popBackStack() }
+            }
             composable(Routes.SHARE_VIEW) { backStack ->
                 val token = backStack.arguments?.getString("token").orEmpty()
                 val vm: ShareViewViewModel = viewModel(key = "share-view-$token", factory = ViewModelFactory {
@@ -138,7 +151,9 @@ private data class Tab(val label: String, val route: String, val icon: ImageVect
         val vm: ShareViewModel = viewModel(key = "share-$id", factory = ViewModelFactory {
             ShareViewModel(id, container.api, container.trackRepository, container.syncRepository)
         })
-        ShareSheet(vm) { shareTrackId = null }
+        // 打开海报编辑器前关闭分享面板，避免两个弹层抢占手势（plan §3.1）。
+        ShareSheet(vm, onDismiss = { shareTrackId = null },
+            onEditImage = { shareTrackId = null; nav.navigate(Routes.poster(id)) })
     }
     val incomingShareToken = pendingToken ?: clipboardToken
     if (incomingShareToken != null && container.tokenStore.token != null && destination?.route != Routes.LOGIN) {
