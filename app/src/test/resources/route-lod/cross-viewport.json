@@ -1,0 +1,17 @@
+{
+  "name": "cross-viewport",
+  "description": "U 形轨迹两次穿越视口：两次穿越之间断开（不跨缺口连接），每段补前驱/后继点",
+  "viewport": {"minLng": 116.004, "minLat": 38.9999, "maxLng": 116.010, "maxLat": 39.0001},
+  "expectedViewportPolylines": [
+    ["q0", "q1", "q2"],
+    ["q3", "q4", "q5"]
+  ],
+  "points": [
+    {"id": "q0", "time": "2026-01-01T08:00:00", "lon": 116.000, "lat": 39.0000, "checkin": false},
+    {"id": "q1", "time": "2026-01-01T08:01:00", "lon": 116.020, "lat": 39.0000, "checkin": false},
+    {"id": "q2", "time": "2026-01-01T08:02:00", "lon": 116.020, "lat": 39.0060, "checkin": false},
+    {"id": "q3", "time": "2026-01-01T08:03:00", "lon": 115.996, "lat": 39.0060, "checkin": false},
+    {"id": "q4", "time": "2026-01-01T08:04:00", "lon": 115.996, "lat": 39.0000, "checkin": false},
+    {"id": "q5", "time": "2026-01-01T08:05:00", "lon": 116.032, "lat": 39.0000, "checkin": false}
+  ]
+}

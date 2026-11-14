@@ -1,0 +1,12 @@
+{
+  "name": "loop",
+  "description": "回环（往返）：首末点坐标重合，退化弦按到点距离处理；band 8 丢中点、band 10 起全保留",
+  "points": [
+    {"id": "l1", "time": "2026-01-01T08:00:00", "lon": 116.000, "lat": 39.000, "checkin": false},
+    {"id": "l2", "time": "2026-01-01T08:01:00", "lon": 116.000, "lat": 39.005, "checkin": false},
+    {"id": "l3", "time": "2026-01-01T08:02:00", "lon": 116.005, "lat": 39.010, "checkin": false},
+    {"id": "l4", "time": "2026-01-01T08:03:00", "lon": 116.010, "lat": 39.005, "checkin": false},
+    {"id": "l5", "time": "2026-01-01T08:04:00", "lon": 116.010, "lat": 39.000, "checkin": false},
+    {"id": "l6", "time": "2026-01-01T08:05:00", "lon": 116.000, "lat": 39.000, "checkin": false}
+  ]
+}

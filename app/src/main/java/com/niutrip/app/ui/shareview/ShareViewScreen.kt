@@ -62,7 +62,7 @@ import com.niutrip.app.ui.theme.*
                 currentAvatarUrl = currentUserAvatarUrl,
                 focusCurrentRequest = state.currentFocusRequest,
                 showRouteEnd = finished,
-                detailDays = state.detailDays,
+                legacyDetailDays = state.detailDays,
                 onCameraIdle = viewModel::onCameraIdle,
             )
             TopAppBar(title = { Column { Text(state.data?.track?.track_name.orEmpty(), fontWeight = FontWeight.Bold); Text("${state.data?.track?.owner_username} 的轨迹${if (finished) " · 已结束" else ""}", color = Info, style = MaterialTheme.typography.bodySmall) } },

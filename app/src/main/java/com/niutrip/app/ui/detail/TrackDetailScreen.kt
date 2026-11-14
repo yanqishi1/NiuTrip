@@ -128,7 +128,9 @@ import com.niutrip.app.ui.theme.*
                 focusCurrentRequest = state.currentFocusRequest,
                 showFullRoute = state.fullRouteFocused,
                 showRouteEnd = state.track?.track_status == "FINISHED",
-                detailDays = state.detailDays,
+                routeGeometry = state.routeGeometry,
+                renderModel = state.renderModel,
+                liveTail = state.liveTail,
                 onCameraIdle = viewModel::onCameraIdle,
             )
             TopAppBar(title = { Row(verticalAlignment = Alignment.CenterVertically) {
@@ -316,8 +318,7 @@ import com.niutrip.app.ui.theme.*
         title = { Text("操作失败") }, text = { Text(state.error.orEmpty()) },
         confirmButton = { TextButton({ viewModel.dismissError() }) { Text("知道了") } })
     selectedPointId?.let { pointId ->
-        // 点击的标记可能来自视口细点（比粗线同 id 点更完整），优先在细点里找
-        (state.detailDays.values.flatten() + state.days.flatMap { it.points })
+        state.days.flatMap { it.points }
             .firstOrNull { it.id == pointId }?.let { point ->
             CheckinDetailSheet(
                 point = point,

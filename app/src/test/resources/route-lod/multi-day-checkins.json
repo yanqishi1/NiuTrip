@@ -1,0 +1,15 @@
+{
+  "name": "multi-day-checkins",
+  "description": "跨 3 日 + 打卡点：每日首尾、全程首尾、MANUAL 打卡点在所有层级强制保留；共线填充点（c2m）始终丢弃",
+  "points": [
+    {"id": "c1a", "time": "2026-01-01T08:00:00", "lon": 116.000, "lat": 39.000, "checkin": false},
+    {"id": "c1b", "time": "2026-01-01T08:30:00", "lon": 116.002, "lat": 39.001, "checkin": true},
+    {"id": "c1c", "time": "2026-01-01T09:00:00", "lon": 116.004, "lat": 39.000, "checkin": false},
+    {"id": "c2a", "time": "2026-01-02T08:00:00", "lon": 116.005, "lat": 39.002, "checkin": false},
+    {"id": "c2m", "time": "2026-01-02T08:20:00", "lon": 116.006, "lat": 39.002, "checkin": false},
+    {"id": "c2b", "time": "2026-01-02T08:40:00", "lon": 116.007, "lat": 39.002, "checkin": true},
+    {"id": "c2c", "time": "2026-01-02T09:00:00", "lon": 116.009, "lat": 39.002, "checkin": false},
+    {"id": "c3a", "time": "2026-01-03T08:00:00", "lon": 116.009, "lat": 39.004, "checkin": false},
+    {"id": "c3b", "time": "2026-01-03T08:30:00", "lon": 116.011, "lat": 39.004, "checkin": true}
+  ]
+}

@@ -7,14 +7,15 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [PendingPointEntity::class, TrackEntity::class, CloudPointEntity::class,
-        PointSyncStateEntity::class],
-    version = 3,
+        PointSyncStateEntity::class, RouteLodCacheEntity::class],
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun pendingPointDao(): PendingPointDao
     abstract fun trackDao(): TrackDao
     abstract fun cloudPointDao(): CloudPointDao
+    abstract fun routeLodCacheDao(): RouteLodCacheDao
 }
 
 val MIGRATION_2_3 = object : Migration(2, 3) {
@@ -44,6 +45,28 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
                 baselineComplete INTEGER NOT NULL,
                 accountKey TEXT NOT NULL
             )
+        """.trimIndent())
+    }
+}
+
+/** v3 → v4：新增本地 LOD 派生缓存表（方案 §6.3）；失败只影响派生缓存，不动事实数据。 */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS route_lod_cache (
+                trackId TEXT NOT NULL PRIMARY KEY,
+                accountKey TEXT NOT NULL,
+                sourceFingerprint TEXT NOT NULL,
+                algorithmVersion INTEGER NOT NULL,
+                pointCount INTEGER NOT NULL,
+                importancePayload BLOB NOT NULL,
+                createdAt INTEGER NOT NULL,
+                lastAccessAt INTEGER NOT NULL
+            )
+        """.trimIndent())
+        db.execSQL("""
+            CREATE INDEX IF NOT EXISTS index_route_lod_cache_lastAccessAt
+            ON route_lod_cache(lastAccessAt)
         """.trimIndent())
     }
 }

@@ -5,6 +5,7 @@ import com.niutrip.app.core.GeoBbox
 import com.niutrip.app.core.PointLite
 import com.niutrip.app.data.local.FakePendingPointDao
 import com.niutrip.app.data.local.FakeCloudPointDao
+import com.niutrip.app.data.local.FakeRouteLodCacheDao
 import com.niutrip.app.data.local.CloudPointEntity
 import com.niutrip.app.data.local.PendingPointEntity
 import com.niutrip.app.data.local.PointSyncStateEntity
@@ -125,91 +126,88 @@ class TrackDetailViewModelTest {
         val cached = withContext(Dispatchers.Default) {
             withTimeout(5_000) { vm.state.first { !it.loading } }
         }
-        assertTrue(cached.pointsLoaded)
-        assertEquals("cached", cached.points.single().point_id)
+        assertEquals("cached", cached.points.single().point_id)   // 本地全量立即绘制
+        // 几何后台构建完成后进入 Ready，全程未发 overview
+        val ready = withContext(Dispatchers.Default) {
+            withTimeout(5_000) {
+                vm.state.first { it.routeGeometry is RouteGeometryState.Ready }
+            }
+        }
+        val geometry = ready.routeGeometry as RouteGeometryState.Ready
+        assertEquals(listOf("cached"), (0 until geometry.index.pointCount).map(geometry.index::idAt))
         gate.complete(Unit)
     }
 
-    @Test fun `overview renders without downloading full points`() = runTest {
+    @Test fun `overview previews first then full local sync switches to ready`() = runTest {
+        var overviewCalls = 0
         val api = object : StubApi() {
-            override suspend fun trackOverview(id: String, recordView: Boolean) = TrackOverviewDto(
-                trackDto().copy(point_count = 1306, checkin_count = 29), 321_000.0,
-                listOf(ShareDayDto("2026-09-11", listOf(pointDto("preview").copy(point_source = "AUTO")))))
-            override suspend fun points(id: String, page: Int): PointsPage =
-                error("overview 路径不得回退全量分页拉点")
+            override suspend fun trackOverview(id: String, recordView: Boolean): TrackOverviewDto {
+                overviewCalls++
+                return overviewDto("preview")
+            }
+            override suspend fun pointChanges(id: String, cursor: String?) =
+                PointChangesDto("cursor-1", false, listOf(pointDto("full1"), pointDto("full2")))
         }
-        val vm = vm(emptyList(), LocationSource { LocResult.Failure("unused") }, api)
+        // 带云端点缓存：完整基线走 point-changes 增量同步
+        val pointCache = FakeCloudPointDao()
+        val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao, pointCache),
+            LocationSource { LocResult.Failure("unused") },
+            SyncRepository(api, FakePendingPointDao()), ImagePreparer { error("unused") })
         vm.load()
 
+        // 首屏：overview 占位（不等待全量）
         assertFalse(vm.state.value.loading)
-        assertFalse(vm.state.value.pointsLoaded)          // 只有粗线，无全量点
-        assertEquals(1306, vm.state.value.track?.point_count)
-        assertEquals(321_000.0, vm.state.value.totalDistanceMeters, 0.0)  // 里程用服务端精确值
         assertEquals("preview", vm.state.value.days.single().points.single().id)
+        assertTrue(vm.state.value.routeGeometry is RouteGeometryState.Preview)
+        assertEquals(1, overviewCalls)
+
+        // 后台完整基线同步 + LOD 构建后切 Ready（方案 Phase 1）
+        val ready = withContext(Dispatchers.Default) {
+            withTimeout(5_000) {
+                vm.state.first { it.routeGeometry is RouteGeometryState.Ready }
+            }
+        }
+        val geometry = ready.routeGeometry as RouteGeometryState.Ready
+        assertEquals(setOf("full1", "full2"),
+            (0 until geometry.index.pointCount).map(geometry.index::idAt).toSet())
+        assertEquals(listOf("full1", "full2"), ready.days.single().points.map(PointLite::id))
     }
 
-    @Test fun `camera idle below detail zoom does not fetch viewport points`() = runTest {
+    @Test fun `background sync failure keeps local ready route silently`() = runTest {
+        val track = trackDto().copy(track_status = "FINISHED")
+        val trackDao = object : TrackDao by FakeDao {
+            override suspend fun get(id: String) = TrackEntity.from(track)
+        }
+        val pointCache = FakeCloudPointDao(
+            initialPoints = listOf(CloudPointEntity.from("t1", pointDto("cached"))),
+            initialStates = listOf(PointSyncStateEntity("t1", "cursor-1", true, "test-account")),
+        )
+        val api = object : StubApi() {
+            override suspend fun track(id: String, recordView: Boolean) = track
+            override suspend fun pointChanges(id: String, cursor: String?): PointChangesDto =
+                error("offline")   // 增量同步失败
+        }
+        val sync = SyncRepository(api, FakePendingPointDao())
+        val vm = TrackDetailViewModel(
+            "t1", TrackRepository(api, trackDao, pointCache),
+            LocationSource { LocResult.Failure("unused") }, sync,
+            ImagePreparer { error("unused") })
+
+        vm.load()
+
+        val ready = withContext(Dispatchers.Default) {
+            withTimeout(5_000) {
+                vm.state.first { it.routeGeometry is RouteGeometryState.Ready }
+            }
+        }
+        // 断网下：本地 Ready 保留、无错误（离线可用，方案 §2.4.7）
+        assertTrue(ready.routeGeometry is RouteGeometryState.Ready)
+        assertNull(ready.error)
+        assertEquals("cached", ready.points.single().point_id)
+    }
+
+    @Test fun `camera idle never hits bbox api and produces render model`() = runTest {
         // pointsInBbox 未打桩（TODO()）：若被调用会直接炸掉测试
-        val api = overviewApi("preview")
-        val vm = vm(emptyList(), LocationSource { LocResult.Failure("unused") }, api)
-        vm.load()
-
-        vm.onCameraIdle(GeoBbox(100.0, 30.0, 100.1, 30.1), 13.5f)
-
-        assertTrue(vm.state.value.detailDays.isEmpty())
-    }
-
-    @Test fun `camera idle at detail zoom fetches padded viewport once and caches coverage`() = runTest {
-        val api = object : StubApi() {
-            override suspend fun trackOverview(id: String, recordView: Boolean) = overviewDto("preview")
-            override suspend fun pointsInBbox(id: String, bbox: String): BboxPointsDto {
-                fetchedBboxes += bbox
-                return BboxPointsDto(listOf(pointDto("detail1"), pointDto("detail2")))
-            }
-        }
-        val vm = vm(emptyList(), LocationSource { LocResult.Failure("unused") }, api)
-        vm.load()
-        fetchedBboxes.clear()
-
-        vm.onCameraIdle(GeoBbox(100.0, 30.0, 100.1, 30.1), 14.5f)
-        // 拉取范围 = 视口每边外扩半屏
-        assertEquals(listOf("99.95000,29.95000,100.15000,30.15000"), fetchedBboxes)
-        // 细点按日合入 detailDays，替换渲染用的粗线数据
-        assertEquals(listOf("detail1", "detail2"),
-            vm.state.value.detailDays.values.single().map(PointLite::id))
-        // 已覆盖区域内的再次静止（略小视口）不重复拉取
-        vm.onCameraIdle(GeoBbox(100.02, 30.0, 100.08, 30.1), 15f)
-        assertEquals(1, fetchedBboxes.size)
-        // 平移到未覆盖区域 → 再拉一次
-        vm.onCameraIdle(GeoBbox(100.4, 30.0, 100.5, 30.1), 15f)
-        assertEquals(2, fetchedBboxes.size)
-    }
-
-    @Test fun `bbox fetch failure is silent and retried on next idle`() = runTest {
-        var calls = 0
-        val api = object : StubApi() {
-            override suspend fun trackOverview(id: String, recordView: Boolean) = overviewDto("preview")
-            override suspend fun pointsInBbox(id: String, bbox: String): BboxPointsDto {
-                calls++
-                if (calls == 1) error("offline")
-                return BboxPointsDto(listOf(pointDto("detail1")))
-            }
-        }
-        val vm = vm(emptyList(), LocationSource { LocResult.Failure("unused") }, api)
-        vm.load()
-
-        vm.onCameraIdle(GeoBbox(100.0, 30.0, 100.1, 30.1), 15f)
-        assertTrue(vm.state.value.detailDays.isEmpty())    // 失败静默，粗线仍在
-        assertNull(vm.state.value.error)
-
-        vm.onCameraIdle(GeoBbox(100.0, 30.0, 100.1, 30.1), 15f)   // 未入缓存 → 重试
-        assertEquals(2, calls)
-        assertEquals(listOf("detail1"),
-            vm.state.value.detailDays.values.single().map(PointLite::id))
-    }
-
-    @Test fun `full local baseline skips viewport fetches`() = runTest {
-        var bboxCalls = 0
         val track = trackDto().copy(point_count = 1)
         val trackDao = object : TrackDao by FakeDao {
             override suspend fun get(id: String) = TrackEntity.from(track)
@@ -222,10 +220,6 @@ class TrackDetailViewModelTest {
             override suspend fun track(id: String, recordView: Boolean) = track
             override suspend fun pointChanges(id: String, cursor: String?) =
                 PointChangesDto("cursor-2", false, emptyList())
-            override suspend fun pointsInBbox(id: String, bbox: String): BboxPointsDto {
-                bboxCalls++
-                return BboxPointsDto(emptyList())
-            }
         }
         val sync = SyncRepository(api, FakePendingPointDao())
         val vm = TrackDetailViewModel(
@@ -234,15 +228,129 @@ class TrackDetailViewModelTest {
             ImagePreparer { error("unused") })
 
         vm.load()
-        // 缓存基线应用含一次 Default 线程跳转，先等它落地再触发相机静止
-        withTimeout(5_000) { vm.state.first { it.pointsLoaded } }
-        vm.onCameraIdle(GeoBbox(100.0, 30.0, 100.1, 30.1), 15f)
+        withContext(Dispatchers.Default) {
+            withTimeout(5_000) { vm.state.first { it.routeGeometry is RouteGeometryState.Ready } }
+        }
+        vm.onCameraIdle(GeoBbox(99.95, 29.95, 100.05, 30.05), 15.5f)
 
-        assertEquals(0, bboxCalls)                          // 本地全量在，无需按视口拉
-        assertTrue(vm.state.value.pointsLoaded)
+        val model = withContext(Dispatchers.Default) {
+            withTimeout(5_000) { vm.state.first { it.renderModel != null } }.renderModel!!
+        }
+        assertEquals(14, model.band)
+        // 同一视口再次静止：key 不变，不重建
+        val before = vm.state.value.renderModel
+        vm.onCameraIdle(GeoBbox(99.95, 29.95, 100.05, 30.05), 15.9f)
+        assertTrue(before === vm.state.value.renderModel ||
+            vm.state.value.renderModel?.key == before?.key)
     }
 
-    private val fetchedBboxes = mutableListOf<String>()
+    @Test fun `stale generation results cannot overwrite newer track`() = runTest {
+        val track = trackDto()
+        val trackDao = object : TrackDao by FakeDao {
+            override suspend fun get(id: String) = TrackEntity.from(track)
+        }
+        val pointCache = FakeCloudPointDao(
+            initialPoints = listOf(CloudPointEntity.from("t1", pointDto("first"))),
+            initialStates = listOf(PointSyncStateEntity("t1", "cursor-1", true, "test-account")),
+        )
+        val api = object : StubApi() {
+            override suspend fun track(id: String, recordView: Boolean) = track
+            override suspend fun pointChanges(id: String, cursor: String?) =
+                PointChangesDto("cursor-2", false, emptyList())
+        }
+        val sync = SyncRepository(api, FakePendingPointDao())
+        val vm = TrackDetailViewModel(
+            "t1", TrackRepository(api, trackDao, pointCache),
+            LocationSource { LocResult.Failure("unused") }, sync,
+            ImagePreparer { error("unused") })
+
+        vm.load()
+        withContext(Dispatchers.Default) {
+            withTimeout(5_000) { vm.state.first { it.routeGeometry is RouteGeometryState.Ready } }
+        }
+
+        // 数据变化后重进：第二次 load 的 generation 必须胜出
+        pointCache.rows.removeAll { it.pointId == "first" }
+        pointCache.upsertAll(listOf(CloudPointEntity.from("t1",
+            pointDto("second").copy(longitude = 100.5, point_time = "2026-09-11T11:00:00"))))
+        vm.load()
+        val ready = withContext(Dispatchers.Default) {
+            withTimeout(5_000) {
+                vm.state.first { state ->
+                    (state.routeGeometry as? RouteGeometryState.Ready)?.generation == 2L
+                }
+            }
+        }
+        val geometry = ready.routeGeometry as RouteGeometryState.Ready
+        assertEquals(listOf("second"), (0 until geometry.index.pointCount).map(geometry.index::idAt))
+    }
+
+    @Test fun `finished track lod cache is persisted for next visit`() = runTest {
+        val track = trackDto().copy(track_status = "FINISHED")
+        val trackDao = object : TrackDao by FakeDao {
+            override suspend fun get(id: String) = TrackEntity.from(track)
+        }
+        val pointCache = FakeCloudPointDao(
+            initialPoints = listOf(CloudPointEntity.from("t1", pointDto("cached"))),
+            initialStates = listOf(PointSyncStateEntity("t1", "cursor-1", true, "test-account")),
+        )
+        val lod = FakeRouteLodCacheDao()
+        val api = object : StubApi() {
+            override suspend fun track(id: String, recordView: Boolean) = track
+            override suspend fun pointChanges(id: String, cursor: String?) =
+                PointChangesDto("cursor-2", false, emptyList())
+        }
+        val sync = SyncRepository(api, FakePendingPointDao())
+        val vm = TrackDetailViewModel(
+            "t1", TrackRepository(api, trackDao, pointCache, FakePendingPointDao(), lod),
+            LocationSource { LocResult.Failure("unused") }, sync,
+            ImagePreparer { error("unused") })
+
+        vm.load()
+        withContext(Dispatchers.Default) {
+            withTimeout(5_000) { vm.state.first { it.routeGeometry is RouteGeometryState.Ready } }
+        }
+        // 非录制轨迹：LOD 构建结果落缓存（方案 §5.3）
+        assertEquals(1, lod.rows.size)
+        assertEquals(1, lod.rows.values.single().pointCount)
+    }
+
+    @Test fun `recorded point during recording extends live tail locally`() = runTest {
+        val track = trackDto().copy(track_status = "RECORDING")
+        val trackDao = object : TrackDao by FakeDao {
+            override suspend fun get(id: String) = TrackEntity.from(track)
+        }
+        val pointCache = FakeCloudPointDao(
+            initialPoints = listOf(CloudPointEntity.from("t1", pointDto("cached"))),
+            initialStates = listOf(PointSyncStateEntity("t1", "cursor-1", true, "test-account")),
+        )
+        val api = object : StubApi() {
+            override suspend fun track(id: String, recordView: Boolean) = track
+            override suspend fun pointChanges(id: String, cursor: String?) =
+                PointChangesDto("cursor-2", false, emptyList())
+        }
+        val syncDao = FakePendingPointDao()
+        val sync = SyncRepository(api, syncDao)
+        val vm = TrackDetailViewModel(
+            "t1", TrackRepository(api, trackDao, pointCache),
+            LocationSource { LocResult.Failure("unused") }, sync,
+            ImagePreparer { error("unused") })
+
+        vm.load()
+        withContext(Dispatchers.Default) {
+            withTimeout(5_000) { vm.state.first { it.routeGeometry is RouteGeometryState.Ready } }
+        }
+        sync.notifyPointRecorded(PendingPointEntity(trackId = "t1", pointId = "local1",
+            lon = 116.397, lat = 39.908, time = 1_700_000_001_000,
+            source = "AUTO", createdAt = 0))
+
+        // 尾部全精度附加显示，且不打网络（方案 §5.3）
+        val state = vm.state.value
+        assertTrue(state.liveTail.isNotEmpty())
+        assertEquals("local1", state.liveTail.last().id)
+        assertEquals(setOf("cached", "local1"), state.points.map { it.point_id }.toSet())
+    }
+
     private fun overviewDto(pointId: String) = TrackOverviewDto(
         trackDto().copy(point_count = 1), 88.0,
         listOf(ShareDayDto("2026-09-11", listOf(pointDto(pointId)))))
@@ -289,6 +397,82 @@ class TrackDetailViewModelTest {
         assertEquals(listOf("upload", "finish"), calls)
         assertEquals("FINISHED", vm.state.value.track?.track_status)
         assertTrue(dao.rows.isEmpty())
+    }
+
+    @Test fun `finishing rebuilds final geometry and absorbs live tail`() = runTest {
+        val track = trackDto().copy(point_count = 1)
+        val trackDao = object : TrackDao by FakeDao {
+            override suspend fun get(id: String) = TrackEntity.from(track)
+        }
+        val pointCache = FakeCloudPointDao(
+            initialPoints = listOf(CloudPointEntity.from("t1", pointDto("cached"))),
+            initialStates = listOf(PointSyncStateEntity("t1", "cursor-1", true, "test-account")),
+        )
+        val lod = FakeRouteLodCacheDao()
+        val api = object : StubApi() {
+            override suspend fun track(id: String, recordView: Boolean) = track
+            override suspend fun pointChanges(id: String, cursor: String?) =
+                PointChangesDto("cursor-2", false, emptyList())
+            override suspend fun patchTrack(id: String, body: TrackPatchIn) =
+                track.copy(track_status = "FINISHED")
+        }
+        val sync = SyncRepository(api, FakePendingPointDao())
+        val vm = TrackDetailViewModel(
+            "t1", TrackRepository(api, trackDao, pointCache, lodCache = lod),
+            LocationSource { LocResult.Failure("unused") }, sync,
+            ImagePreparer { error("unused") })
+        vm.load()
+        withContext(Dispatchers.Default) {
+            withTimeout(5_000) { vm.state.first { it.routeGeometry is RouteGeometryState.Ready } }
+        }
+        sync.notifyPointRecorded(PendingPointEntity(
+            trackId = "t1", pointId = "local1", lon = 100.01, lat = 30.0,
+            time = 1_700_000_001_000, source = "AUTO", createdAt = 0))
+        assertTrue(vm.state.value.liveTail.isNotEmpty())
+
+        vm.changeStatus("FINISHED").join()
+        val finished = withContext(Dispatchers.Default) {
+            withTimeout(5_000) {
+                vm.state.first {
+                    it.track?.track_status == "FINISHED" &&
+                        it.routeGeometry is RouteGeometryState.Ready && it.liveTail.isEmpty()
+                }
+            }
+        }
+
+        val geometry = finished.routeGeometry as RouteGeometryState.Ready
+        assertEquals(setOf("cached", "local1"),
+            (0 until geometry.index.pointCount).map(geometry.index::idAt).toSet())
+        assertTrue(lod.rows.containsKey("t1"))
+    }
+
+    @Test fun `preview live point adds distance once before full baseline is ready`() = runTest {
+        val first = pointDto("preview").copy(
+            point_source = "AUTO", longitude = 100.0, latitude = 30.0,
+            point_time = "2026-09-11T10:00:00")
+        val api = object : StubApi() {
+            override suspend fun trackOverview(id: String, recordView: Boolean) = TrackOverviewDto(
+                trackDto().copy(point_count = 1), 500.0,
+                listOf(ShareDayDto("2026-09-11", listOf(first))))
+            override suspend fun pointChanges(id: String, cursor: String?): PointChangesDto =
+                error("offline")
+        }
+        val sync = SyncRepository(api, FakePendingPointDao())
+        val vm = TrackDetailViewModel(
+            "t1", TrackRepository(api, FakeDao, FakeCloudPointDao()),
+            LocationSource { LocResult.Failure("unused") }, sync,
+            ImagePreparer { error("unused") })
+        vm.load()
+        val live = PendingPointEntity(
+            trackId = "t1", pointId = "live1", lon = 100.01, lat = 30.0,
+            time = 1_778_583_600_000, source = "AUTO", createdAt = 0)
+
+        sync.notifyPointRecorded(live)
+        val once = vm.state.value.totalDistanceMeters
+        sync.notifyPointRecorded(live)
+
+        assertTrue(once > 500.0)
+        assertEquals(once, vm.state.value.totalDistanceMeters, 0.0)
     }
 
     @Test fun `failed final sync preserves points and does not finish`() = runTest {

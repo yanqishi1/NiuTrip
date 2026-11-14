@@ -8,6 +8,7 @@ import com.amap.api.location.AMapLocationClient
 import com.niutrip.app.data.TokenStore
 import com.niutrip.app.data.local.AppDatabase
 import com.niutrip.app.data.local.MIGRATION_2_3
+import com.niutrip.app.data.local.MIGRATION_3_4
 import com.niutrip.app.data.remote.ApiService
 import com.niutrip.app.data.remote.AuthInterceptor
 import com.niutrip.app.data.repo.AuthRepository
@@ -106,8 +107,10 @@ class AppContainer(app: Application) {
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val tokenStore = TokenStore(app)
     val db: AppDatabase = Room.databaseBuilder(app, AppDatabase::class.java, "niutrip.db")
-        .addMigrations(MIGRATION_2_3)
-        .fallbackToDestructiveMigration()
+        .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
+        // v1→v2 无真实迁移（历史版本依赖破坏性回退），仅对最老版本保留该行为；
+        // 2→3→4 必须走真实迁移（方案 §6.3 禁止 destructive migration）
+        .fallbackToDestructiveMigrationFrom(1)
         .build()
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
     private val client = OkHttpClient.Builder()
@@ -118,7 +121,7 @@ class AppContainer(app: Application) {
         .addConverterFactory(json.asConverterFactory("application/json".toMediaType())).build().create(ApiService::class.java)
     val authRepository = AuthRepository(api, tokenStore)
     val trackRepository = TrackRepository(
-        api, db.trackDao(), db.cloudPointDao(), db.pendingPointDao(),
+        api, db.trackDao(), db.cloudPointDao(), db.pendingPointDao(), db.routeLodCacheDao(),
         accountKey = { tokenStore.cacheOwnerKey },
     )
     val syncRepository = SyncRepository(api, db.pendingPointDao())

@@ -37,6 +37,33 @@ class MarkerPresentationTest {
         assertEquals(3_000, autoPointLimitForZoom(18f))
     }
 
+    @Test fun `zoomed out checkins are never decluttered away`() {
+        // 大尺寸比例尺（全程视图）打卡点必须全显：低缩放两档间距为 0，
+        // 12 级起的卡片档保持既有去重不变
+        val far = markerPresentationForZoom(9.9f)
+        val overview = markerPresentationForZoom(11.9f)
+        assertEquals(0f, far.minHorizontalSpacingDp)
+        assertEquals(0f, far.minVerticalSpacingDp)
+        assertEquals(0f, overview.minHorizontalSpacingDp)
+        assertEquals(0f, overview.minVerticalSpacingDp)
+        assertEquals(82f, markerPresentationForZoom(12f).minHorizontalSpacingDp)
+        assertEquals(72f, markerPresentationForZoom(12f).minVerticalSpacingDp)
+
+        // 0 间距下去重退化为全保留：挤在一起的打卡点也全部可见
+        val crowded = listOf(
+            MarkerScreenPoint(0, 0),
+            MarkerScreenPoint(2, 1),
+            MarkerScreenPoint(4, 0),
+            MarkerScreenPoint(1, 3),
+        )
+        assertEquals(crowded.indices.toList(), nonOverlappingMarkerIndices(
+            points = crowded,
+            reserved = listOf(MarkerScreenPoint(0, 0)),
+            minHorizontalPx = far.minHorizontalSpacingDp,
+            minVerticalPx = far.minVerticalSpacingDp,
+        ))
+    }
+
     @Test fun `decluttering respects existing endpoints and accepted checkins`() {
         val visible = nonOverlappingMarkerIndices(
             points = listOf(

@@ -1,0 +1,16 @@
+{
+  "name": "straight",
+  "description": "共线轨迹：任意 LOD 层级只保留首尾（共线点重要度为 0）",
+  "points": [
+    {"id": "s01", "time": "2026-01-01T08:00:00", "lon": 116.000, "lat": 39.000, "checkin": false},
+    {"id": "s02", "time": "2026-01-01T08:01:00", "lon": 116.001, "lat": 39.000, "checkin": false},
+    {"id": "s03", "time": "2026-01-01T08:02:00", "lon": 116.002, "lat": 39.000, "checkin": false},
+    {"id": "s04", "time": "2026-01-01T08:03:00", "lon": 116.003, "lat": 39.000, "checkin": false},
+    {"id": "s05", "time": "2026-01-01T08:04:00", "lon": 116.004, "lat": 39.000, "checkin": false},
+    {"id": "s06", "time": "2026-01-01T08:05:00", "lon": 116.005, "lat": 39.000, "checkin": false},
+    {"id": "s07", "time": "2026-01-01T08:06:00", "lon": 116.006, "lat": 39.000, "checkin": false},
+    {"id": "s08", "time": "2026-01-01T08:07:00", "lon": 116.007, "lat": 39.000, "checkin": false},
+    {"id": "s09", "time": "2026-01-01T08:08:00", "lon": 116.008, "lat": 39.000, "checkin": false},
+    {"id": "s10", "time": "2026-01-01T08:09:00", "lon": 116.009, "lat": 39.000, "checkin": false}
+  ]
+}

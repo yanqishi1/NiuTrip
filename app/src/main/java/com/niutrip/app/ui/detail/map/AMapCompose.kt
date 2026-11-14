@@ -22,7 +22,9 @@ import com.niutrip.app.core.GeoBbox
 import com.niutrip.app.core.PointLite
 import com.niutrip.app.core.RouteGeometry
 import com.niutrip.app.core.dayColor
+import com.niutrip.app.core.route.RouteRenderModel
 import com.niutrip.app.ui.common.absoluteMediaUrl
+import com.niutrip.app.ui.detail.RouteGeometryState
 import coil.imageLoader
 import coil.request.ImageRequest
 import coil.request.SuccessResult
@@ -45,9 +47,18 @@ internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
     showFullRoute: Boolean = true,
     showEndpoints: Boolean = true,
     showRouteEnd: Boolean = true,
-    /** 视口 LOD 局部细点（按日）；zoom ≥ [DETAIL_ZOOM] 时按日期替换粗线，缩小自动回退。 */
-    detailDays: Map<LocalDate, List<PointLite>> = emptyMap(),
-    /** 相机静止（缩放/平移结束）回调，用于按可视区域拉取细点。 */
+    /** 轨迹几何状态（方案 §6.7）：Ready 时轨迹线来自本地 RouteGeometryIndex。 */
+    routeGeometry: RouteGeometryState = RouteGeometryState.Empty,
+    /** 相机静止后按 key 生成的渲染模型；key 不变则不重建。 */
+    renderModel: RouteRenderModel? = null,
+    /** 录制中尾部全精度附加线（方案 §5.3）。 */
+    liveTail: List<PointLite> = emptyList(),
+    /**
+     * 分享查看页过渡期专用（方案 §6.2）：网络 bbox 细点按日替换粗线。
+     * 详情页已迁移本地 LOD，不再使用；迁移完成后删除。
+     */
+    legacyDetailDays: Map<LocalDate, List<PointLite>> = emptyMap(),
+    /** 相机静止回调：只更新本地视口/zoom，不触发网络。 */
     onCameraIdle: ((GeoBbox, Float) -> Unit)? = null,
 ) {
     val context = LocalContext.current
@@ -55,26 +66,29 @@ internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
     val mapView = remember { TextureMapView(context).apply { onCreate(Bundle()) } }
     val cameraMemory = remember { MapCameraMemory() }
     val overlays = remember { MapOverlays() }
+    val routeRegistry = remember(mapView) { MapPolylineRegistry(mapView.map) }
+    val routeController = remember(mapView) { RouteOverlayController(routeRegistry) }
     var visibleViewport by remember { mutableStateOf<MapViewport?>(null) }
     var visibleZoom by remember { mutableFloatStateOf(mapView.map.cameraPosition.zoom) }
     val markerPresentation = markerPresentationForZoom(visibleZoom)
-    // 视口 LOD：高缩放且有局部数据时按日期整组替换粗线（未覆盖的日期仍画粗线）
-    val detailActive = detailDays.isNotEmpty() && visibleZoom >= DETAIL_ZOOM
-    val drawDays = remember(days, detailDays, detailActive) {
-        if (!detailActive) days
-        else days.map { day -> detailDays[day.date]?.let { day.copy(points = it) } ?: day }
+    // 分享查看页过渡：高缩放且有局部数据时按日期整组替换粗线（详情页不受影响）
+    val legacyDetailActive = legacyDetailDays.isNotEmpty() && visibleZoom >= DETAIL_ZOOM
+    val drawDays = remember(days, legacyDetailDays, legacyDetailActive) {
+        if (!legacyDetailActive) days
+        else days.map { day -> legacyDetailDays[day.date]?.let { day.copy(points = it) } ?: day }
     }
     val visibleDays = remember(drawDays, selectedDayIdx) {
         visibleDaysForSelection(drawDays, selectedDayIdx)
     }
     val visiblePoints = remember(visibleDays) { visibleDays.flatMap(DayGroup::points) }
-    val routePaths = remember(drawDays, selectedDayIdx) { visibleRoutePaths(drawDays, selectedDayIdx) }
     // 起终点 pin / fitView / 最新位置恒用全局（粗线）数据——端点可能在已拉区域之外
     val coarseVisibleDays = remember(days, selectedDayIdx) {
         visibleDaysForSelection(days, selectedDayIdx)
     }
     val coarsePoints = remember(coarseVisibleDays) { coarseVisibleDays.flatMap(DayGroup::points) }
-    val detailViewport = visibleViewport.takeIf { visibleZoom >= DETAIL_ZOOM }
+    // 保守路径（Preview/Building/Ready 首帧）：完整点直接绘制（方案 §6.5）
+    val routePaths = remember(drawDays, selectedDayIdx) { visibleRoutePaths(drawDays, selectedDayIdx) }
+    val detailViewport = visibleViewport.takeIf { legacyDetailActive }
     val renderedRoutePaths = remember(routePaths, detailViewport) {
         detailViewport?.let { routePathsInViewport(routePaths, it) } ?: routePaths
     }
@@ -144,21 +158,59 @@ internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
     AndroidView(factory = { mapView }, modifier = modifier) { view ->
         val map = view.map
         map.uiSettings.isZoomControlsEnabled = false
-        if (overlays.routeDays !== drawDays || overlays.routeIndex != selectedDayIdx ||
-            overlays.routeLimit != routeLimit || overlays.routeViewport != detailViewport) {
-            overlays.polylines.forEach(Polyline::remove)
-            overlays.polylines.clear()
-            val pathLimits = routePathPointLimits(renderedRoutePaths, routeLimit)
-            renderedRoutePaths.forEachIndexed { index, path ->
-                val limit = pathLimits[index]
-                val points = sampledRoutePoints(path.points, limit).map { LatLng(it.lat, it.lon) }
-                if (points.size >= 2) overlays.polylines += map.addPolyline(
-                    PolylineOptions().addAll(points).width(10f).color(dayColor(path.dayIndex).toInt()))
+        // —— 轨迹线双模式（方案 §6.7）——
+        // Ready + 当前 generation 渲染模型：本地 LOD 原子切换（先 add 新层后 remove 旧层）
+        val readyGeometry = routeGeometry as? RouteGeometryState.Ready
+        val readyModel = renderModel?.takeIf {
+            readyGeometry != null && it.key.generation == readyGeometry.generation
+        }
+        if (readyGeometry != null && readyModel != null) {
+            routeController.replace(readyModel, readyGeometry.index)
+            // 切到控制器后再移除保守层，避免空白帧
+            if (overlays.legacyPolylines.isNotEmpty()) {
+                overlays.legacyPolylines.forEach(Polyline::remove)
+                overlays.legacyPolylines.clear()
+                overlays.routeDays = null
             }
-            overlays.routeDays = drawDays
-            overlays.routeIndex = selectedDayIdx
-            overlays.routeLimit = routeLimit
-            overlays.routeViewport = detailViewport
+            // 录制尾部全精度附加线（最后日颜色；选中其他日时不画）
+            val tailKey = liveTail.takeIf {
+                it.size >= 2 && (selectedDayIdx == ALL_DAYS_SELECTION || selectedDayIdx == days.lastIndex)
+            }?.let { it.map(PointLite::id) to days.lastIndex }
+            if (overlays.tailKey != tailKey) {
+                val freshTail = tailKey?.let {
+                    map.addPolyline(PolylineOptions()
+                        .addAll(liveTail.map { point -> LatLng(point.lat, point.lon) })
+                        .width(10f).color(dayColor(days.lastIndex.coerceAtLeast(0)).toInt()))
+                }
+                overlays.tailPolyline?.remove()
+                overlays.tailPolyline = freshTail
+                overlays.tailKey = tailKey
+            }
+        } else {
+            routeController.clear()
+            overlays.tailPolyline?.remove()
+            overlays.tailPolyline = null
+            overlays.tailKey = null
+            // 保守路径：overview 粗线 / 完整点直接绘制（方案回滚级别 1 同款）
+            if (overlays.routeDays !== drawDays || overlays.routeIndex != selectedDayIdx ||
+                overlays.routeLimit != routeLimit || overlays.routeViewport != detailViewport) {
+                val fresh = mutableListOf<Polyline>()
+                val pathLimits = routePathPointLimits(renderedRoutePaths, routeLimit)
+                renderedRoutePaths.forEachIndexed { index, path ->
+                    val limit = pathLimits[index]
+                    val points = sampledRoutePoints(path.points, limit).map { LatLng(it.lat, it.lon) }
+                    if (points.size >= 2) fresh += map.addPolyline(
+                        PolylineOptions().addAll(points).width(10f).color(dayColor(path.dayIndex).toInt()))
+                }
+                // 新层 add 完成后再移除旧层（方案 §2.4.6）
+                overlays.legacyPolylines.forEach(Polyline::remove)
+                overlays.legacyPolylines.clear()
+                overlays.legacyPolylines += fresh
+                overlays.routeDays = drawDays
+                overlays.routeIndex = selectedDayIdx
+                overlays.routeLimit = routeLimit
+                overlays.routeViewport = detailViewport
+            }
         }
         val hasPoints = coarsePoints.isNotEmpty()
         if (cameraMemory.selectedDayIdx != selectedDayIdx ||
@@ -216,7 +268,9 @@ internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
                     add(map.projection.toScreenLocation(LatLng(it.lat, it.lon)).toMarkerScreenPoint())
                 }
             }
-        val checkinCandidates = if (markerPresentation.checkinStyle == CheckinMarkerStyle.HIDDEN || visibleViewport == null) {
+        // 首帧相机尚未静止（viewport 为 null）时也照常画打卡点：
+        // 标记按经纬度定位，只有去重用到投影，不存在位置错误
+        val checkinCandidates = if (markerPresentation.checkinStyle == CheckinMarkerStyle.HIDDEN) {
             emptyList()
         } else {
             visiblePoints
@@ -385,7 +439,11 @@ private class MapOverlays {
     var routeIndex = -2
     var routeLimit = 0
     var routeViewport: MapViewport? = null
-    val polylines = mutableListOf<Polyline>()
+    /** 保守路径（非 Ready）的轨迹线。 */
+    val legacyPolylines = mutableListOf<Polyline>()
+    /** 录制尾部附加线。 */
+    var tailPolyline: Polyline? = null
+    var tailKey: Pair<List<String>, Int>? = null
     /** 相机静止回调（每次重组刷新，避免一次性 listener 持有过期闭包）。 */
     var cameraIdle: ((GeoBbox, Float) -> Unit)? = null
     var markerDays: List<DayGroup>? = null
@@ -609,10 +667,12 @@ internal data class MarkerPresentation(
 )
 
 internal fun markerPresentationForZoom(zoom: Float): MarkerPresentation = when {
+    // 低缩放（全程视图）打卡点必须全显：COMPACT 小点 + 0 间距（不做去重）；
+    // 12 级起的卡片档维持既有去重，避免大卡片互相压盖
     zoom < 10f -> MarkerPresentation(
-        false, CheckinMarkerStyle.COMPACT, EndpointMarkerStyle.COMPACT, .5f, .5f, 38f, 38f)
+        false, CheckinMarkerStyle.COMPACT, EndpointMarkerStyle.COMPACT, .5f, .5f, 0f, 0f)
     zoom < 12f -> MarkerPresentation(
-        false, CheckinMarkerStyle.COMPACT, EndpointMarkerStyle.COMPACT, .5f, .5f, 30f, 30f)
+        false, CheckinMarkerStyle.COMPACT, EndpointMarkerStyle.COMPACT, .5f, .5f, 0f, 0f)
     zoom < 14f -> MarkerPresentation(
         false, CheckinMarkerStyle.CARD, EndpointMarkerStyle.SIGN, .7f, .7f, 82f, 72f)
     zoom < 16f -> MarkerPresentation(
