@@ -44,6 +44,9 @@ interface ApiService {
         @Query("cursor") cursor: String? = null,
     ): PointChangesDto
     @PATCH("tracks/{trackId}/points/{pointId}/") suspend fun patchPoint(@Path("trackId") trackId: String, @Path("pointId") pointId: String, @Body body: PointPatchIn): PointDto
+    @PATCH("tracks/{trackId}/share-annotations/") suspend fun patchShareAnnotations(
+        @Path("trackId") trackId: String, @Body body: ShareAnnotationsIn,
+    ): ShareAnnotationsOut
     @DELETE("tracks/{trackId}/points/{pointId}/") suspend fun deletePoint(@Path("trackId") trackId: String, @Path("pointId") pointId: String)
     @POST("tracks/{trackId}/share/") suspend fun share(@Path("trackId") id: String, @Body body: ShareIn): ShareOut
     @DELETE("tracks/{trackId}/share/") suspend fun revokeShare(@Path("trackId") id: String): Response<Unit>

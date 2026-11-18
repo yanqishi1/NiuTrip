@@ -107,7 +107,7 @@ class AppContainer(app: Application) {
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val tokenStore = TokenStore(app)
     val db: AppDatabase = Room.databaseBuilder(app, AppDatabase::class.java, "niutrip.db")
-        .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
+        .addMigrations(MIGRATION_2_3, MIGRATION_3_4, com.niutrip.app.data.local.MIGRATION_4_5)
         // v1→v2 无真实迁移（历史版本依赖破坏性回退），仅对最老版本保留该行为；
         // 2→3→4 必须走真实迁移（方案 §6.3 禁止 destructive migration）
         .fallbackToDestructiveMigrationFrom(1)

@@ -340,25 +340,43 @@ private fun applyPosterMarkers(
     val map = view.map
     val density = context.resources.displayMetrics.density
     val points = days.flatMap(DayGroup::points)
+    val route = points.filterIndexed { index, _ -> index % maxOf(1, points.size / 2000) == 0 }.map {
+        val xy = map.projection.toScreenLocation(LatLng(it.lat, it.lon)); xy.x / density to xy.y / density
+    }
     val output = mutableListOf<com.amap.api.maps.model.Marker>()
     val reserved = mutableListOf<PosterMarkerBox>()
     val startScreen = map.projection.toScreenLocation(LatLng(endpoints.start.lat, endpoints.start.lon))
     val endScreen = map.projection.toScreenLocation(LatLng(endpoints.end.lat, endpoints.end.lon))
     val same = kotlin.math.hypot((startScreen.x - endScreen.x).toDouble(),
         (startScreen.y - endScreen.y).toDouble()) < 40 * density
-    listOf(endpoints.start to true, endpoints.end to false).forEach { (point, start) ->
-        val screen = map.projection.toScreenLocation(LatLng(point.lat, point.lon))
-        val name = if (style.showEndpointNames) PosterMapMarkers.endpointName(point, if (start) names.start else names.end) else null
-        val offset = if (same) if (start) -18f else 18f else 0f
-        val art = posterMarkerArtwork(if (start) "起" else "终", name,
-            if (start) 0xFF239DAB.toInt() else 0xFFE04435.toInt(), density,
-            if (same) start else screen.x > view.width / 2, offset)
-        output.add(map.addMarker(MarkerOptions().position(LatLng(point.lat, point.lon))
+    fun endpoint(position: LatLng, art: PosterMarkerArtwork) {
+        val screen = map.projection.toScreenLocation(position)
+        output.add(map.addMarker(MarkerOptions().position(position)
             .icon(BitmapDescriptorFactory.fromBitmap(art.bitmap)).anchor(art.anchorU, art.anchorV).zIndex(10f)))
-        reserved.add(PosterMarkerBox(screen.x / density - art.anchorU * art.bitmap.width / density - 8,
+        if (art.collisionBoxes != null) reserved.addAll(art.collisionBoxes.map {
+            PosterMarkerBox(it.left + screen.x / density, it.top + screen.y / density,
+                it.right + screen.x / density, it.bottom + screen.y / density).expanded(8f)
+        }) else reserved.add(PosterMarkerBox(screen.x / density - art.anchorU * art.bitmap.width / density - 8,
             screen.y / density - art.anchorV * art.bitmap.height / density - 8,
             screen.x / density + (1 - art.anchorU) * art.bitmap.width / density + 8,
             screen.y / density + (1 - art.anchorV) * art.bitmap.height / density + 8))
+    }
+    val startName = if (style.showEndpointNames) PosterMapMarkers.endpointName(endpoints.start, names.start) else null
+    val endName = if (style.showEndpointNames) PosterMapMarkers.endpointName(endpoints.end, names.end) else null
+    if (same) {
+        val position = LatLng(endpoints.start.lat, endpoints.start.lon)
+        val center = map.projection.toScreenLocation(position)
+        endpoint(position, posterEndpointPairArtwork(startName, endName,
+            (startScreen.x - center.x) / density, (startScreen.y - center.y) / density,
+            (endScreen.x - center.x) / density, (endScreen.y - center.y) / density, density,
+            PosterMarkerBox(8 - center.x / density, 8 - center.y / density,
+                (view.width - center.x) / density - 8, (view.height - center.y) / density - 30),
+            route.map { it.first - center.x / density to it.second - center.y / density }))
+    } else {
+        endpoint(LatLng(endpoints.start.lat, endpoints.start.lon), posterMarkerArtwork("起", startName,
+            0xFF239DAB.toInt(), density, startScreen.x > view.width / 2))
+        endpoint(LatLng(endpoints.end.lat, endpoints.end.lon), posterMarkerArtwork("终", endName,
+            0xFFE04435.toInt(), density, endScreen.x > view.width / 2))
     }
     if (!style.showCheckinMarkers) return output
     val candidates = points.filter { it.isCheckin }.mapIndexedNotNull { index, point ->
@@ -367,19 +385,18 @@ private fun applyPosterMarkers(
             PosterMarkerCandidate(point, xy.x / density, xy.y / density, index + 1)
         }
     }
-    // Sample the line in screen space for inexpensive obstruction checks.
-    val route = points.filterIndexed { index, _ -> index % maxOf(1, points.size / 2000) == 0 }.map {
-        val xy = map.projection.toScreenLocation(LatLng(it.lat, it.lon)); xy.x / density to xy.y / density
-    }
-    PosterMapMarkers.select(candidates, reserved, route, view.width / density, view.height / density).forEach { selected ->
-        val art = posterMarkerArtwork(selected.order.toString(), null, 0xFF303735.toInt(), density)
-        output.add(map.addMarker(MarkerOptions().position(LatLng(selected.point.lat, selected.point.lon))
+    PosterMapMarkers.layoutNames(candidates, reserved, route, view.width / density, view.height / density,
+        style.preferredCheckins, ::posterNameWidth).forEach { selected ->
+        val art = posterNamedMarkerArtwork(selected, density)
+        val point = selected.candidate.point
+        output.add(map.addMarker(MarkerOptions().position(LatLng(point.lat, point.lon))
             .icon(BitmapDescriptorFactory.fromBitmap(art.bitmap)).anchor(art.anchorU, art.anchorV).zIndex(5f)))
     }
     return output
 }
 
-internal data class PosterMarkerArtwork(val bitmap: Bitmap, val anchorU: Float, val anchorV: Float)
+internal data class PosterMarkerArtwork(val bitmap: Bitmap, val anchorU: Float, val anchorV: Float,
+    val collisionBoxes: List<PosterMarkerBox>? = null)
 
 internal fun posterMarkerArtwork(
     text: String, name: String?, color: Int, density: Float, labelLeft: Boolean = false, offset: Float = 0f,

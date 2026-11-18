@@ -101,15 +101,32 @@ data class PosterMapState(
     val centerLat: Double? = null,
     val centerLon: Double? = null,
     val zoom: Double? = null,
+    val outlineZoom: Float = 1f,
+    val outlinePanX: Float = 0f,
+    val outlinePanY: Float = 0f,
 )
 
 /** 照片模式透明路线模块；地图模式路线与地图地理绑定，不存在该模块。 */
 data class PosterRouteModuleState(
     val placement: ModulePlacement,
-    val theme: PosterRouteTheme = PosterRouteTheme.BY_DAY,
+    val theme: PosterRouteTheme = PosterRouteTheme.SINGLE,
     val showCheckinMarkers: Boolean = true,
     val showEndpointNames: Boolean = true,
+    val showMapOutline: Boolean = true,
+    val preferredCheckins: Map<String, String> = emptyMap(),
+    /** Empty = endpoints only; null is supported by legacy rendering callers as all checkins. */
+    val selectedCheckinIds: Set<String>? = emptySet(),
 )
+
+enum class PosterTextGroup { HEADER, STATS }
+
+enum class PosterTextColor(val argb: Int, val label: String) {
+    WHITE(0xFFFFFFFF.toInt(), "白色"), BLACK(0xFF202224.toInt(), "黑色"),
+    RED(0xFFE5484D.toInt(), "红色"), GRAY(0xFF85898E.toInt(), "灰色"),
+    YELLOW(0xFFFFD452.toInt(), "黄色"), GREEN(0xFF27AE80.toInt(), "绿色"),
+    BLUE(0xFF4285E8.toInt(), "蓝色"), ORANGE(0xFFFF9545.toInt(), "橙色"),
+    PINK(0xFFF47AA8.toInt(), "粉色"), CYAN(0xFF46CED1.toInt(), "青色"),
+}
 
 data class PosterInfoModuleState(
     val placement: ModulePlacement,
@@ -119,13 +136,19 @@ data class PosterInfoModuleState(
     val showName: Boolean = true,
     val showDate: Boolean = true,
     val showAux: Boolean = true,
+    val fontScale: Float = 1f,
+    val titleFontScale: Float = fontScale,
+    val titleColor: PosterTextColor? = null,
+    val statsColor: PosterTextColor? = null,
 )
 
 /** 地图模式路线样式（plan §5.2）：颜色主题与标记开关。 */
 data class PosterRouteStyleState(
-    val theme: PosterRouteTheme = PosterRouteTheme.BY_DAY,
+    val theme: PosterRouteTheme = PosterRouteTheme.SINGLE,
     val showCheckinMarkers: Boolean = true,
     val showEndpointNames: Boolean = true,
+    val preferredCheckins: Map<String, String> = emptyMap(),
+    val selectedCheckinIds: Set<String>? = emptySet(),
 )
 
 data class PosterDocument(
@@ -152,7 +175,9 @@ data class PosterDocument(
             val photo = requireNotNull(photoState) { "原图比例依赖照片" }
             PosterCanvasSpec.create(ratioKind, photo.imageWidth, photo.imageHeight)
         }
-        else -> PosterCanvasSpec.create(ratioKind)
+        else -> PosterCanvasSpec.create(ratioKind).let {
+            if (backgroundMode == PosterBackgroundMode.MAP) it.copy(widthPx = it.widthPx * 2, heightPx = it.heightPx * 2) else it
+        }
     }
 }
 

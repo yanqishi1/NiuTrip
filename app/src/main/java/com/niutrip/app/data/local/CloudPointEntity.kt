@@ -20,6 +20,7 @@ data class CloudPointEntity(
     val pointTime: String,
     val source: String,
     val reportTime: String?,
+    @androidx.room.ColumnInfo(defaultValue = "0") val shareAnnotation: Boolean = false,
 ) {
     fun toDto() = PointDto(
         point_id = pointId,
@@ -32,6 +33,7 @@ data class CloudPointEntity(
         point_time = pointTime,
         point_source = source,
         report_time = reportTime,
+        share_annotation = shareAnnotation,
     )
 
     companion object {
@@ -48,6 +50,7 @@ data class CloudPointEntity(
             pointTime = point.point_time,
             source = point.point_source,
             reportTime = point.report_time,
+            shareAnnotation = point.share_annotation,
         )
     }
 }

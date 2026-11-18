@@ -55,13 +55,15 @@ fun CheckinDetailSheet(
     saving: Boolean,
     onDismiss: () -> Unit,
     onSave: (name: String, desc: String, longitude: Double, latitude: Double,
-             existingImages: List<String>, newImages: List<Uri>) -> Unit,
+             existingImages: List<String>, newImages: List<Uri>, shareAnnotation: Boolean) -> Unit,
     onDelete: (() -> Unit)? = null,
+    shareAnnotation: Boolean = point.shareAnnotation,
 ) {
     val context = LocalContext.current
     var editing by remember(point.id) { mutableStateOf(false) }
     var name by remember(point.id, point.name) { mutableStateOf(point.name.orEmpty()) }
     var desc by remember(point.id, point.desc) { mutableStateOf(point.desc.orEmpty()) }
+    var annotate by remember(point.id, shareAnnotation) { mutableStateOf(shareAnnotation) }
     var longitude by remember(point.id, point.lon) { mutableStateOf(point.lon.toString()) }
     var latitude by remember(point.id, point.lat) { mutableStateOf(point.lat.toString()) }
     var existingImages by remember(point.id, point.images) { mutableStateOf(point.images) }
@@ -121,6 +123,10 @@ fun CheckinDetailSheet(
                     label = { Text("内容") },
                     minLines = 3,
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(annotate, { annotate = it }, enabled = !saving)
+                    Text("在分享图中标注", style = MaterialTheme.typography.bodyMedium)
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlinedTextField(
                         value = longitude,
@@ -182,12 +188,13 @@ fun CheckinDetailSheet(
                         latitude = point.lat.toString()
                         existingImages = point.images
                         newImages = emptyList()
+                        annotate = shareAnnotation
                         editing = false
                     }, enabled = !saving, modifier = Modifier.weight(1f)) {
                         Text("取消")
                     }
                     Button(
-                        onClick = { onSave(name, desc, parsedLongitude!!, parsedLatitude!!, existingImages, newImages) },
+                        onClick = { onSave(name, desc, parsedLongitude!!, parsedLatitude!!, existingImages, newImages, annotate) },
                         enabled = !saving && formError == null,
                         modifier = Modifier.weight(1f),
                     ) {

@@ -1,9 +1,10 @@
 package com.niutrip.app.data.local
 
 import android.content.Context
-import androidx.room.Database
 import androidx.room.Room
-import androidx.room.RoomDatabase
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import com.niutrip.app.core.route.RouteLodParams
 import com.niutrip.app.core.route.RouteLodPayload
@@ -33,34 +34,57 @@ class RouteLodCacheMigrationTest {
             importancePayload = ByteArray(payloadBytes), createdAt = lastAccessAt, lastAccessAt = lastAccessAt)
 
     @Test
-    fun `v3 database migrates to v4 keeping all existing rows`() = runBlocking {
+    fun `v3 and v4 databases migrate to v5 retaining points and refreshing sync metadata`() = runBlocking {
+        for (oldVersion in listOf(3, 4)) {
         val context = context()
-        val dbName = "route-lod-migration-test.db"
+        val dbName = "route-lod-migration-$oldVersion-test.db"
         context.deleteDatabase(dbName)
-        // 1. 用相同实体建 v3 库（Room 生成的 schema 与线上 v3 一致）并写入数据
-        val v3 = Room.databaseBuilder(context, V3Database::class.java, dbName)
-            .allowMainThreadQueries().build()
-        v3.trackDao().upsert(TrackEntity("t1", "轨迹", "", null, null, "AUTO", "FINISHED", "PRIVATE", 3, 1, 2, 1))
-        v3.cloudPointDao().upsertAll(listOf(cloudPoint("p1"), cloudPoint("p2")))
-        v3.cloudPointDao().applyChanges("t1", emptyList(), emptyList(), "c9", hasMore = false, accountKey = "acc")
-        v3.pendingPointDao().insert(PendingPointEntity(trackId = "t1", pointId = "local", lon = 116.0,
-            lat = 39.0, time = 1L, source = "AUTO", createdAt = 1L))
-        // 移除 room_master_table：让 v4 打开时走 schema 校验 + 真实迁移路径
-        v3.openHelper.writableDatabase.execSQL("DROP TABLE IF EXISTS room_master_table")
-        v3.close()
+        // Build the actual old schema; current entities already contain the v5 columns.
+        val old = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context).name(dbName)
+                .callback(object : SupportSQLiteOpenHelper.Callback(oldVersion) {
+                    override fun onCreate(db: SupportSQLiteDatabase) {
+                        db.execSQL("""CREATE TABLE tracks (trackId TEXT NOT NULL PRIMARY KEY,
+                            name TEXT NOT NULL, imageUrl TEXT NOT NULL, startTime TEXT, endTime TEXT,
+                            recordMode TEXT NOT NULL, status TEXT NOT NULL, shareMode TEXT NOT NULL,
+                            pointCount INTEGER NOT NULL, checkinCount INTEGER NOT NULL,
+                            viewCount INTEGER NOT NULL, viewerCount INTEGER NOT NULL, sharerUsername TEXT)""")
+                        db.execSQL("""CREATE TABLE pending_points (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                            trackId TEXT NOT NULL, pointId TEXT NOT NULL, lon REAL NOT NULL, lat REAL NOT NULL,
+                            name TEXT, `desc` TEXT, imgs TEXT NOT NULL, time INTEGER NOT NULL,
+                            source TEXT NOT NULL, createdAt INTEGER NOT NULL)""")
+                        db.execSQL("CREATE UNIQUE INDEX index_pending_points_pointId ON pending_points(pointId)")
+                        MIGRATION_2_3.migrate(db)
+                        if (oldVersion == 4) MIGRATION_3_4.migrate(db)
+                        db.execSQL("INSERT INTO tracks VALUES ('t1', '轨迹', '', NULL, NULL, 'AUTO', 'FINISHED', 'PRIVATE', 3, 1, 2, 1, NULL)")
+                        for (id in listOf("p1", "p2")) db.execSQL(
+                            "INSERT INTO cloud_points VALUES (?, 't1', 116, 39, NULL, NULL, '[]', '2026-01-01T08:00:00', 'AUTO', NULL)", arrayOf(id))
+                        db.execSQL("INSERT INTO point_sync_state VALUES ('t1', 'c9', 1, 'acc')")
+                        db.execSQL("INSERT INTO pending_points VALUES (1, 't1', 'local', 116, 39, NULL, NULL, '[]', 1, 'MANUAL', 1)")
+                    }
+                    override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+                }).build())
+        old.writableDatabase
+        old.close()
 
         // 2. 以 v4 打开：执行 MIGRATION_3_4 并校验 schema
         val v4 = Room.databaseBuilder(context, AppDatabase::class.java, dbName)
-            .addMigrations(MIGRATION_3_4)
+            .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
             .allowMainThreadQueries()
             .build()
 
         // 3. 四张旧表数据完全保留（方案 §6.3）
         assertEquals("轨迹", v4.trackDao().get("t1")?.name)
         assertEquals(listOf("p1", "p2"), v4.cloudPointDao().forTrack("t1").map { it.pointId })
-        assertEquals("c9", v4.cloudPointDao().syncState("t1")?.cursor)
-        assertTrue(v4.cloudPointDao().syncState("t1")?.baselineComplete == true)
+        assertNull(v4.cloudPointDao().syncState("t1"))
+        assertTrue(v4.cloudPointDao().forTrack("t1").none { it.shareAnnotation })
         assertEquals(1, v4.pendingPointDao().count())
+        val pending = v4.pendingPointDao().forTrack("t1").single()
+        assertEquals(false, pending.shareAnnotation)
+        v4.pendingPointDao().insert(pending.copy(shareAnnotation = true))
+        assertTrue(v4.pendingPointDao().forTrack("t1").single().shareAnnotation)
+        v4.cloudPointDao().upsertAll(listOf(cloudPoint("p1").copy(shareAnnotation = true)))
+        assertTrue(v4.cloudPointDao().forTrack("t1").first().toDto().toLite()!!.shareAnnotation)
 
         // 4. 新表可读写
         val payload = RouteLodPayload.encode(floatArrayOf(1f, 2f), booleanArrayOf(true, false))
@@ -71,6 +95,7 @@ class RouteLodCacheMigrationTest {
         assertEquals("fp-t1", stored!!.sourceFingerprint)
         assertTrue(payload.contentEquals(stored.importancePayload))
         v4.close()
+        }
     }
 
     @Test
@@ -140,17 +165,4 @@ class RouteLodCacheMigrationTest {
             db.close()
         }
     }
-}
-
-/** 与线上 v3 完全同构的测试库：只用于生成真实 v3 schema。 */
-@Database(
-    entities = [PendingPointEntity::class, TrackEntity::class, CloudPointEntity::class,
-        PointSyncStateEntity::class],
-    version = 3,
-    exportSchema = false,
-)
-abstract class V3Database : RoomDatabase() {
-    abstract fun pendingPointDao(): PendingPointDao
-    abstract fun trackDao(): TrackDao
-    abstract fun cloudPointDao(): CloudPointDao
 }

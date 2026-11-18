@@ -545,6 +545,7 @@ class TrackDetailViewModel(
         latitude: Double,
         existingImages: List<String>,
         newImages: List<Uri>,
+        shareAnnotation: Boolean? = null,
         onDone: () -> Unit = {},
     ) = viewModelScope.launch {
         pointContentValidation(wasCheckin, name, desc, existingImages.size + newImages.size)?.let { message ->
@@ -575,7 +576,7 @@ class TrackDetailViewModel(
             val images = existingImages + uploaded
             val source = if (normalizedName == null) "AUTO" else "MANUAL"
             val localUpdated = syncRepository.updateLocalPoint(
-                pointId, longitude, latitude, normalizedName, normalizedDesc, images, source)
+                pointId, longitude, latitude, normalizedName, normalizedDesc, images, source, shareAnnotation)
             if (localUpdated) {
                 _state.value.points.first { it.point_id == pointId }.copy(
                     point_longitude = null,
@@ -586,6 +587,7 @@ class TrackDetailViewModel(
                     point_desc = normalizedDesc,
                     point_img_url = images,
                     point_source = source,
+                    share_annotation = if (source == "MANUAL") shareAnnotation ?: _state.value.points.first { it.point_id == pointId }.share_annotation else false,
                 ).also { viewModelScope.launch { syncRepository.flushOnce() } }
             } else {
                 val updated = repository.updatePoint(id, pointId, PointPatchIn(
@@ -594,6 +596,7 @@ class TrackDetailViewModel(
                     point_name = normalizedName,
                     point_desc = normalizedDesc,
                     point_img_url = images,
+                    share_annotation = shareAnnotation,
                 ))
                 runCatching { repository.detail(id) }.onSuccess { track ->
                     _state.update { it.copy(track = track) }
@@ -672,6 +675,7 @@ private fun PendingPointEntity.toPointDto() = PointDto(
         .getOrDefault(emptyList()),
     point_time = time.toBeijingDateTime().toApiTime(),
     point_source = source,
+    share_annotation = shareAnnotation,
 )
 
 private fun RecordedTrackPoint.toPointDto() = PointDto(

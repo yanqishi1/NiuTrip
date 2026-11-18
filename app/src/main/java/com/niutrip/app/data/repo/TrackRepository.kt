@@ -157,6 +157,19 @@ class TrackRepository(
         pointCache?.deletePoints(listOf(pointId))
         invalidateRouteGeometry(trackId)
     }
+    suspend fun updateShareAnnotations(trackId: String, updates: List<ShareAnnotationPatch>): List<PointDto> {
+        if (updates.isEmpty()) return emptyList()
+        require(updates.size <= 2000) { "单次最多修改 2000 个打卡标记" }
+        val expected = updates.associate { it.point_id to it.share_annotation }
+        require(expected.size == updates.size) { "打卡点不能重复" }
+        val result = apiCall { api.patchShareAnnotations(trackId, ShareAnnotationsIn(updates)) }.results
+        check(result.size == expected.size && result.map { it.point_id }.toSet() == expected.keys &&
+            result.all { point -> point.share_annotation == expected[point.point_id] }) {
+            "分享标注未完整保存，请重试"
+        }
+        pointCache?.upsertAll(result.map { CloudPointEntity.from(trackId, it) })
+        return result
+    }
     suspend fun delete(id: String) {
         apiCall { api.deleteTrack(id) }
         refreshCacheWithout(id)

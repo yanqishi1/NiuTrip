@@ -56,6 +56,7 @@ import kotlinx.serialization.Serializable
     val point_img_url: List<String> = emptyList(),
     val point_time: String,
     val point_source: String,
+    val share_annotation: Boolean = false,
 )
 @Serializable data class PointsIn(val points: List<PointIn>)
 @Serializable data class PostPointsOut(val count: Int)
@@ -65,6 +66,7 @@ import kotlinx.serialization.Serializable
     val point_name: String? = null,
     val point_desc: String? = null,
     val point_img_url: List<String> = emptyList(),
+    val share_annotation: Boolean? = null,
 )
 @Serializable data class PointDto(
     val point_id: String,
@@ -80,13 +82,17 @@ import kotlinx.serialization.Serializable
     val report_time: String? = null,
     val is_deleted: Boolean = false,
     val updated_at: String? = null,
+    val share_annotation: Boolean = false,
 ) {
     fun toLite(): PointLite? {
         val parsed = point_time.toLocalDateTimeOrNull() ?: return null
         return PointLite(point_id, parsed, longitude ?: point_longitude ?: return null,
-            latitude ?: point_latitude ?: return null, point_source == "MANUAL", point_name, point_desc, point_img_url)
+            latitude ?: point_latitude ?: return null, point_source == "MANUAL", point_name, point_desc, point_img_url, share_annotation)
     }
 }
+@Serializable data class ShareAnnotationPatch(val point_id: String, val share_annotation: Boolean)
+@Serializable data class ShareAnnotationsIn(val updates: List<ShareAnnotationPatch>)
+@Serializable data class ShareAnnotationsOut(val results: List<PointDto>)
 @Serializable data class PointChangesDto(
     val cursor: String,
     val has_more: Boolean,

@@ -120,7 +120,7 @@ import com.niutrip.app.ui.theme.*
                 editable = false,
                 saving = false,
                 onDismiss = { selectedPointId = null },
-                onSave = { _, _, _, _, _, _ -> },
+                onSave = { _, _, _, _, _, _, _ -> },
             )
         }
     }

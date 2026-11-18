@@ -16,6 +16,25 @@ import org.junit.Test
 import java.util.concurrent.atomic.AtomicInteger
 
 class SyncRepositoryTest {
+    @Test fun `pending checkin flag survives edits and both upload paths`() = runTest {
+        for (targeted in listOf(false, true)) {
+            val pending = row(1, "p1").copy(source = "MANUAL", name = "山顶")
+            val dao = FakePendingPointDao(listOf(pending))
+            var uploaded = false
+            val repo = SyncRepository(object : StubApi() {
+                override suspend fun postPoints(id: String, body: PointsIn): PostPointsOut {
+                    uploaded = body.points.single().share_annotation
+                    return PostPointsOut(1)
+                }
+            }, dao)
+            repo.migrateLocalShareAnnotations("t1", setOf("p1"))
+            repo.updateLocalPoint("p1", 100.0, 30.0, "新名字", null, emptyList(), "MANUAL")
+            assertTrue(dao.forTrack("t1").single().shareAnnotation)
+            if (targeted) repo.flushTrack("t1") else repo.flushOnce()
+            assertTrue(uploaded)
+        }
+    }
+
     private fun row(id: Long, pointId: String, trackId: String = "t1") = PendingPointEntity(
         id = id, trackId = trackId, pointId = pointId, lon = 100.0, lat = 30.0,
         time = 1_700_000_000_000 + id, source = "AUTO", createdAt = 0)

@@ -13,6 +13,9 @@ import com.niutrip.app.data.local.TrackEntity
 import com.niutrip.app.data.remote.PointChangesDto
 import com.niutrip.app.data.remote.PointDto
 import com.niutrip.app.data.remote.PointPatchIn
+import com.niutrip.app.data.remote.ShareAnnotationPatch
+import com.niutrip.app.data.remote.ShareAnnotationsIn
+import com.niutrip.app.data.remote.ShareAnnotationsOut
 import com.niutrip.app.data.remote.StubApi
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
@@ -24,6 +27,35 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RouteLodRepositoryTest {
+    @Test fun `annotation save updates cache and fresh device reads server flag through deltas`() = runTest {
+        var server = point("scenic").copy(point_source = "MANUAL", point_name = "山顶")
+        val api = object : StubApi() {
+            override suspend fun patchShareAnnotations(trackId: String, body: ShareAnnotationsIn): ShareAnnotationsOut {
+                server = server.copy(share_annotation = body.updates.single().share_annotation)
+                return ShareAnnotationsOut(listOf(server))
+            }
+            override suspend fun pointChanges(id: String, cursor: String?) = PointChangesDto("c1", false, listOf(server))
+        }
+        val cache = FakeCloudPointDao()
+        val first = repository(api, points = cache)
+        first.updateShareAnnotations("t1", listOf(ShareAnnotationPatch("scenic", true)))
+        assertTrue(cache.forTrack("t1").single().toDto().toLite()!!.shareAnnotation)
+        val second = repository(api)
+        assertTrue(second.points("t1").single().share_annotation)
+        second.updateShareAnnotations("t1", listOf(ShareAnnotationPatch("scenic", false)))
+        assertFalse(first.points("t1").single().share_annotation)
+    }
+
+    @Test fun `incomplete server annotation response fails without changing cache`() = runTest {
+        val cache = FakeCloudPointDao(initialPoints = listOf(CloudPointEntity.from("t1", point("scenic"))))
+        val api = object : StubApi() {
+            override suspend fun patchShareAnnotations(trackId: String, body: ShareAnnotationsIn) = ShareAnnotationsOut(emptyList())
+        }
+        val failure = runCatching { repository(api, points = cache).updateShareAnnotations("t1", listOf(ShareAnnotationPatch("scenic", true))) }
+        assertTrue(failure.isFailure)
+        assertFalse(cache.forTrack("t1").single().shareAnnotation)
+    }
+
     private fun point(id: String) = PointDto(
         point_id = id, longitude = 100.0, latitude = 30.0,
         point_time = "2026-09-24T10:00:00", point_source = "AUTO")

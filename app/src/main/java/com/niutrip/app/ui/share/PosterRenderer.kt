@@ -8,11 +8,10 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.text.TextPaint
 import android.text.TextUtils
-import com.niutrip.app.core.dayColor
 import com.niutrip.app.core.formatDistance
 import java.io.File
-import kotlin.math.hypot
 import kotlin.math.max
+import kotlin.math.pow
 
 /**
  * 海报位图合成（plan §11）：预览与导出复用同一布局解析与绘制规则，
@@ -27,28 +26,33 @@ object PosterRenderer {
         val showName: Boolean = true,
         val showDate: Boolean = true,
         val showAux: Boolean = true,
+        val fontScale: Float = 1f,
+        val titleFontScale: Float = fontScale,
+        val titleColor: PosterTextColor? = null,
+        val statsColor: PosterTextColor? = null,
     )
+
+    fun infoStyle(state: PosterInfoModuleState) = InfoStyle(
+        state.textTheme, showName = state.showName, showDate = state.showDate, showAux = state.showAux,
+        fontScale = state.fontScale, titleFontScale = state.titleFontScale,
+        titleColor = state.titleColor, statsColor = state.statsColor)
     data class RouteStyle(val theme: PosterRouteTheme, val showCheckins: Boolean,
                           val showEndpointNames: Boolean = true,
-                          val endpointNames: PosterEndpointNames = PosterEndpointNames())
+                          val endpointNames: PosterEndpointNames = PosterEndpointNames(),
+                          val preferredCheckins: Map<String, String> = emptyMap(),
+                          val showMapOutline: Boolean = true,
+                          val outlineTheme: PosterInfoTextTheme = PosterInfoTextTheme.LIGHT,
+                          val selectedCheckinIds: Set<String>? = null)
 
-    private val START_COLOR = 0xFF00B96B.toInt()
-    private val END_COLOR = 0xFFFF5A5F.toInt()
-    private val CHECKIN_COLOR = 0xFFF59E0B.toInt()
     private const val BRAND = "旅行牛牛"
 
-    /**
-     * 信息模块（plan §9.1，参考图排版节奏）：
-     * 名称（最大、单行居中）→ 日期（弱化）→ 英雄里程数字 → 辅助指标（数值上/标签下分列）。
-     * 名称不走 StaticLayout：单行省略由 measureText + TextUtils.ellipsize 处理后居中 drawText，
-     * 确定性居中且描边/填充不可能分叉（真机曾出现一白一黑双标题，StaticLayout 双画笔排版分叉所致）。
-     */
+    /** Transparent editorial summary: rule, title/date, distance, then three statistics. */
     class InfoLayout private constructor(
         private val stats: PosterStats,
         private val style: InfoStyle,
         private val width: Float,
         internal val heightPx: Float,
-        private val nameText: String,
+        internal val nameText: String,
         private val distanceValue: String,
         private val distanceUnit: String,
         internal val auxColumns: List<Pair<String, String>>,
@@ -56,67 +60,88 @@ object PosterRenderer {
         val aspect: Float get() = if (width > 0f) heightPx / width else 0f
 
         fun draw(canvas: Canvas, left: Float, top: Float) {
-            var y = top + gap(0.022f)
-            // 名称：模块内水平居中。
-            if (style.showName) {
-                val paint = fillPaint(fillColor(style), bold = true).apply { textSize = nameSize(width) }
-                drawText(canvas, nameText, left + width / 2f, y + paint.textSize, paint)
-                y += paint.textSize * 1.25f + gap(0.010f)
+            val checkpoint = canvas.save()
+            canvas.clipRect(left, top, left + width, top + heightPx)
+            val rule = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = secondaryColor(this@InfoLayout.style, header = true); strokeWidth = max(1f, width * .002f)
             }
-            // 日期：弱化为次级信息；可能是跨日区间（最长 23 字符），过宽时压缩字号。
+            canvas.drawLine(left + pad(), top + headerGap(.008f), left + width - pad(), top + headerGap(.008f), rule)
+            var y = top + headerGap(.035f)
+            if (style.showName) {
+                val paint = fillPaint(fillColor(style, header = true), bold = true, align = Paint.Align.LEFT)
+                    .apply { textSize = nameSize(width) * titleScale() }
+                y += paint.textSize
+                drawText(canvas, nameText, left + pad(), y, paint)
+                y += headerGap(.02f)
+            }
             if (style.showDate) {
                 stats.dateText?.let { date ->
-                    val paint = fillPaint(secondaryColor(style)).apply { textSize = dateSize(width) }
-                    val available = width - pad() * 2
-                    val measured = paint.measureText(date)
-                    if (measured > available) {
-                        paint.textSize = paint.textSize * available / measured
-                    }
-                    drawText(canvas, date, left + width / 2f, y + paint.textSize, paint)
-                    y += paint.textSize * 1.35f + gap(0.034f)
+                    val paint = fillPaint(secondaryColor(style, header = true), align = Paint.Align.LEFT)
+                        .apply { textSize = dateSize(width) * titleScale() }
+                    fit(paint, date, width - pad() * 2)
+                    y += dateSize(width) * titleScale()
+                    drawText(canvas, date, left + pad(), y, paint)
+                    y += headerGap(.025f)
                 }
             }
-            // 英雄里程：极大加粗数字 + 基线小单位，成对居中（plan §9.2）。
-            val mainPaint = fillPaint(mainColor(style), bold = true, align = Paint.Align.LEFT)
-                .apply { textSize = mainSize(width) }
-            val unitPaint = fillPaint(mainColor(style), bold = true, align = Paint.Align.LEFT)
-                .apply { textSize = unitSize(width) }
+            val label = fillPaint(secondaryColor(style), align = Paint.Align.LEFT).apply { textSize = gap(.03f) }
+            y += gap(.03f)
+            drawText(canvas, "行程总里程", left + pad(), y, label)
+            y += gap(.025f)
+            val mainPaint = fillPaint(fillColor(style), bold = true, align = Paint.Align.LEFT)
+                .apply { textSize = mainSize(width) * scale() }
+            val unitPaint = fillPaint(fillColor(style), bold = true, align = Paint.Align.LEFT)
+                .apply { textSize = unitSize(width) * scale() }
             val unitGap = width * 0.016f
+            val available = width - pad() * 2
+            val total = mainPaint.measureText(distanceValue) + unitGap + unitPaint.measureText(distanceUnit)
+            if (total > available) {
+                val fit = available / total
+                mainPaint.textSize *= fit
+                unitPaint.textSize *= fit
+            }
             val mainWidth = mainPaint.measureText(distanceValue)
-            val unitWidth = if (distanceUnit.isEmpty()) 0f else unitPaint.measureText(distanceUnit)
-            val startX = left + (width - mainWidth - unitWidth - unitGap).coerceAtLeast(0f) / 2f
-            val baseline = y + mainPaint.textSize
+            val startX = left + pad()
+            val baseline = y + mainSize(width) * scale()
             drawText(canvas, distanceValue, startX, baseline, mainPaint)
             if (distanceUnit.isNotEmpty()) {
                 drawText(canvas, distanceUnit, startX + mainWidth + unitGap, baseline, unitPaint)
             }
-            y += mainPaint.textSize * 1.05f + gap(0.030f)
-            // 辅助指标：数值上、标签下的分列数据组，缺失项自动收列（参考图网格节奏）。
+            y = baseline + gap(.035f)
             if (auxColumns.isNotEmpty()) {
-                val columnWidth = width / auxColumns.size
+                val columnWidth = (width - pad() * 2) / auxColumns.size
                 auxColumns.forEachIndexed { index, (value, label) ->
-                    val centerX = left + columnWidth * (index + 0.5f)
-                    val valuePaint = fillPaint(fillColor(style), bold = true).apply { textSize = auxValueSize(width) }
-                    val available = columnWidth * 0.92f
+                    val centerX = left + pad() + columnWidth * index
+                    val valuePaint = fillPaint(fillColor(style), bold = true, align = Paint.Align.LEFT)
+                        .apply { textSize = auxValueSize(width) * scale() }
+                    val columnAvailable = columnWidth * 0.92f
                     val measured = valuePaint.measureText(value)
-                    if (measured > available) {
-                        valuePaint.textSize = valuePaint.textSize * available / measured
+                    if (measured > columnAvailable) {
+                        valuePaint.textSize = valuePaint.textSize * columnAvailable / measured
                     }
-                    drawText(canvas, value, centerX, y + valuePaint.textSize, valuePaint)
-                    val labelPaint = fillPaint(secondaryColor(style)).apply { textSize = auxLabelSize(width) }
-                    drawText(canvas, label, centerX, y + valuePaint.textSize + gap(0.008f) + labelPaint.textSize, labelPaint)
+                    drawText(canvas, value, centerX, y + auxValueSize(width) * scale(), valuePaint)
+                    val labelPaint = fillPaint(secondaryColor(style), align = Paint.Align.LEFT).apply { textSize = auxLabelSize(width) * scale() }
+                    fit(labelPaint, label, columnAvailable)
+                    drawText(canvas, label, centerX, y + auxValueSize(width) * scale() + gap(0.018f) + auxLabelSize(width) * scale(), labelPaint)
                 }
-                y += auxValueSize(width) * 1.2f + gap(0.008f) + auxLabelSize(width) * 1.3f + gap(0.030f)
             }
+            canvas.restoreToCount(checkpoint)
         }
 
         private fun pad(): Float = width * 0.03f
-        private fun gap(ratio: Float): Float = width * ratio
+        private fun scale(): Float = style.fontScale.coerceIn(.8f, 1.6f)
+        private fun titleScale(): Float = style.titleFontScale.coerceIn(.8f, 1.6f)
+        private fun gap(ratio: Float): Float = width * ratio * scale()
+        private fun headerGap(ratio: Float): Float = width * ratio * titleScale()
+        private fun fit(paint: TextPaint, text: String, available: Float) {
+            val measured = paint.measureText(text)
+            if (measured > available) paint.textSize *= available / measured
+        }
 
         /** 双 pass 文本绘制：需要时先画描边再画填充。 */
         private fun drawText(canvas: Canvas, text: String, x: Float, y: Float, paint: TextPaint) {
             if (style.outline) {
-                canvas.drawText(text, x, y, strokePaint(style, paint.textSize).apply {
+                canvas.drawText(text, x, y, strokePaint(style, paint.textSize, paint.color).apply {
                     textAlign = paint.textAlign
                     isFakeBoldText = paint.isFakeBoldText
                 })
@@ -127,25 +152,29 @@ object PosterRenderer {
         companion object {
             fun measure(stats: PosterStats, style: InfoStyle, moduleWidthPx: Float): InfoLayout {
                 val width = moduleWidthPx.coerceAtLeast(1f)
-                val namePaint = fillPaint(fillColor(style), bold = true).apply { textSize = nameSize(width) }
-                val name = stats.name.ifBlank { "未命名轨迹" }
-                val available = width * 0.94f
-                val nameText = TextUtils.ellipsize(
-                    name, namePaint, available, TextUtils.TruncateAt.END).toString()
+                val scale = style.fontScale.coerceIn(.8f, 1.6f)
+                val titleScale = style.titleFontScale.coerceIn(.8f, 1.6f)
+                val namePaint = fillPaint(fillColor(style, header = true), bold = true).apply { textSize = nameSize(width) * titleScale }
+                val name = stats.name.replace(Regex("\\s+"), " ").trim().ifBlank { "未命名轨迹" }
+                val available = width * .94f
+                val nameText = if (namePaint.measureText(name) <= available) name else {
+                    val suffix = "…"
+                    var end = namePaint.breakText(name, true, available - namePaint.measureText(suffix), null)
+                    if (end > 0 && name[end - 1].isHighSurrogate()) end--
+                    name.take(end) + suffix
+                }
                 val (value, unit) = splitDistance(stats.distanceMeters)
                 val auxColumns = if (style.showAux) buildList {
-                    stats.durationText?.let { add(it to "历时") }
-                    if (stats.recordDays > 0) add("${stats.recordDays}" to "天数")
-                    if (stats.checkinCount > 0) add("${stats.checkinCount}" to "打卡")
+                    stats.durationText?.let { add(it to "全程耗时") }
+                    if (stats.recordDays > 0) add("${stats.recordDays}" to "记录天数")
+                    if (stats.checkinCount > 0) add("${stats.checkinCount}" to "打卡点")
                 } else emptyList()
-                var height = width * 0.022f
-                if (style.showName) height += nameSize(width) * 1.25f + width * 0.010f
-                if (style.showDate && stats.dateText != null) height += dateSize(width) * 1.35f + width * 0.034f
-                height += mainSize(width) * 1.05f + width * 0.030f
-                if (auxColumns.isNotEmpty()) {
-                    height += auxValueSize(width) * 1.2f + width * 0.008f + auxLabelSize(width) * 1.3f + width * 0.030f
-                }
-                height += width * 0.024f
+                val headerHeight = width * titleScale * (.035f +
+                    (if (style.showName) .084f else 0f) +
+                    (if (style.showDate && stats.dateText != null) .059f else 0f))
+                val height = headerHeight + width * scale * (
+                    .03f + .025f + .16f + .035f +
+                    (if (auxColumns.isEmpty()) .01f else .058f + .018f + .034f + .025f))
                 return InfoLayout(stats, style, width, height, nameText, value, unit, auxColumns)
             }
 
@@ -156,33 +185,32 @@ object PosterRenderer {
                 else formatted.substring(0, index) to formatted.substring(index + 1)
             }
 
-            // 用户要求：轨迹名称为最大文字；品牌水印已移至画布左上角，不占模块行高。
-            private fun nameSize(width: Float) = width * 0.085f
-            private fun dateSize(width: Float) = width * 0.028f
-            private fun mainSize(width: Float) = width * 0.075f
-            private fun unitSize(width: Float) = width * 0.034f
-            private fun auxValueSize(width: Float) = width * 0.034f
-            private fun auxLabelSize(width: Float) = width * 0.022f
+            private fun nameSize(width: Float) = width * 0.064f
+            private fun dateSize(width: Float) = width * 0.034f
+            private fun mainSize(width: Float) = width * 0.16f
+            private fun unitSize(width: Float) = width * 0.042f
+            private fun auxValueSize(width: Float) = width * 0.058f
+            private fun auxLabelSize(width: Float) = width * 0.034f
 
             /** 字号比例（相对模块宽度），供测试锁定层级关系。 */
             internal fun textRatios(): Map<String, Float> = mapOf(
-                "name" to 0.085f,
-                "main" to 0.075f,
-                "unit" to 0.034f,
-                "auxValue" to 0.034f,
-                "date" to 0.028f,
-                "auxLabel" to 0.022f,
+                "name" to 0.064f,
+                "main" to 0.16f,
+                "unit" to 0.042f,
+                "auxValue" to 0.058f,
+                "date" to 0.034f,
+                "auxLabel" to 0.034f,
             )
 
-            private fun fillColor(style: InfoStyle) =
-                if (style.textTheme == PosterInfoTextTheme.LIGHT) Color.WHITE else Color.rgb(24, 44, 32)
+            private fun fillColor(style: InfoStyle, header: Boolean = false) =
+                (if (header) style.titleColor else style.statsColor)?.argb
+                    ?: if (style.textTheme == PosterInfoTextTheme.LIGHT) Color.WHITE else Color.rgb(32, 34, 36)
 
-            private fun mainColor(style: InfoStyle) =
-                if (style.textTheme == PosterInfoTextTheme.LIGHT) Color.WHITE else Color.rgb(20, 110, 69)
-
-            private fun secondaryColor(style: InfoStyle) =
-                if (style.textTheme == PosterInfoTextTheme.LIGHT) Color.argb(235, 255, 255, 255)
-                else Color.rgb(95, 106, 100)
+            private fun secondaryColor(style: InfoStyle, header: Boolean = false): Int {
+                val custom = if (header) style.titleColor else style.statsColor
+                return custom?.argb ?: if (style.textTheme == PosterInfoTextTheme.LIGHT) Color.argb(235, 255, 255, 255)
+                else Color.rgb(88, 91, 94)
+            }
 
             internal fun fillPaint(
                 color: Int,
@@ -192,14 +220,14 @@ object PosterRenderer {
                 this.color = color; textAlign = align; isFakeBoldText = bold
             }
 
-            internal fun strokePaint(style: InfoStyle, textSize: Float) = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            internal fun strokePaint(style: InfoStyle, textSize: Float, fill: Int = fillColor(style)) = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
                 // 轻描边：与文字反色的半透明描边，保证复杂照片上的可读性（plan §9.2）。
-                color = if (style.textTheme == PosterInfoTextTheme.LIGHT) Color.argb(170, 20, 32, 24)
+                color = if (relativeLuminance(fill) > .45) Color.argb(140, 24, 24, 24)
                 else Color.argb(150, 255, 255, 255)
                 this.textSize = textSize
                 isFakeBoldText = true // 与填充字重一致，保证描边与填充布局完全重合
                 this.style = Paint.Style.STROKE
-                strokeWidth = max(2f, textSize * 0.055f)
+                strokeWidth = max(.5f, textSize * 0.025f)
                 strokeJoin = Paint.Join.ROUND
             }
         }
@@ -212,7 +240,7 @@ object PosterRenderer {
         return contentAspect.toFloat().coerceIn(0.24f, 2.2f)
     }
 
-    /** 照片模式透明路线（plan §8）：投影→等比适配→按天分色→端点与打卡标记。 */
+    /** Keep the existing transparent contours, then draw the shared map-style route layer. */
     fun drawRouteModule(
         canvas: Canvas,
         model: PosterRouteModel,
@@ -221,85 +249,34 @@ object PosterRenderer {
         width: Float,
         height: Float,
         style: RouteStyle,
-    ) {
-        if (width <= 0f || height <= 0f || model.paths.isEmpty()) return
-        val lineWidth = max(4f, width * 0.022f)
-        // 标记与描边留白不能吃掉整个盒子：极扁/极窄路线也要保留可用内容区。
-        val padding = (width * .14f).coerceAtMost(minOf(width, height) * 0.40f)
-        val transform = model.fit(width.toDouble(), height.toDouble(), padding.toDouble())
-        val underlay = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(150, 255, 255, 255)
-            strokeWidth = lineWidth * 2.1f
-            this.style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
-        }
-        val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            strokeWidth = lineWidth
-            this.style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
-        }
-        model.paths.forEachIndexed { index, path ->
-            if (path.size < 2) return@forEachIndexed
-            val color = if (style.theme == PosterRouteTheme.SINGLE) 0xFF00B96B.toInt()
-            else dayColor(model.pathDayIndices.getOrElse(index) { 0 }).toInt()
-            val mapped = path.map { transform.map(it.x, it.y) }
-            // 单条连续 Path：圆头端点 + 圆角转折，弯道处平滑无缺口（plan §8.3）。
-            val routePath = android.graphics.Path()
-            mapped.forEachIndexed { pointIndex, point ->
-                val x = left + point.x.toFloat()
-                val y = top + point.y.toFloat()
-                if (pointIndex == 0) routePath.moveTo(x, y) else routePath.lineTo(x, y)
-            }
-            linePaint.color = color
-            canvas.drawPath(routePath, underlay)
-            canvas.drawPath(routePath, linePaint)
-        }
-        drawMarkers(canvas, model, transform, left, top, width, height, style)
-    }
-
-    private fun drawMarkers(
-        canvas: Canvas,
-        model: PosterRouteModel,
-        transform: PosterRouteTransform,
-        left: Float,
-        top: Float,
-        width: Float,
-        height: Float,
-        style: RouteStyle,
-    ) {
-        val allPoints = model.paths.flatten()
-        if (allPoints.isEmpty()) return
-        val startPoint = allPoints.first()
-        val endPoint = allPoints.last()
-        val startXY = transform.map(startPoint.x, startPoint.y)
-        val endXY = transform.map(endPoint.x, endPoint.y)
-        val scale = minOf(width / 320f, height / 90f).coerceAtLeast(.1f)
-        val reserved = mutableListOf<PosterMarkerBox>()
-        val roundTrip = hypot(startXY.x - endXY.x, startXY.y - endXY.y) < scale * 10
-        listOf(Triple(startPoint, startXY, true), Triple(endPoint, endXY, false)).forEach { (point, xy, start) ->
-            val name = if (style.showEndpointNames) PosterMapMarkers.endpointName(point.point,
-                if (start) style.endpointNames.start else style.endpointNames.end) else null
-            val art = posterMarkerArtwork(if (start) "起" else "终", name,
-                if (start) START_COLOR else END_COLOR, scale, if (roundTrip) start else xy.x > width / 2,
-                if (roundTrip) if (start) -18f else 18f else 0f)
-            val x = xy.x.toFloat() - art.anchorU * art.bitmap.width
-            val y = xy.y.toFloat() - art.anchorV * art.bitmap.height
-            canvas.drawBitmap(art.bitmap, left + x, top + y, null)
-            reserved.add(PosterMarkerBox(x / scale - 8, y / scale - 8,
-                (x + art.bitmap.width) / scale + 8, (y + art.bitmap.height) / scale + 8))
-            art.bitmap.recycle()
-        }
-        if (!style.showCheckins) return
-        val mapped = allPoints.distinctBy { it.point.id }.map { it to transform.map(it.x, it.y) }
-        val candidates = mapped.filter { it.first.point.isCheckin }.mapIndexedNotNull { index, (point, xy) ->
-            if (point.point.id == startPoint.point.id || point.point.id == endPoint.point.id) null
-            else PosterMarkerCandidate(point.point, xy.x.toFloat() / scale, xy.y.toFloat() / scale, index + 1)
-        }
-        val route = mapped.map { it.second.x.toFloat() / scale to it.second.y.toFloat() / scale }
-        PosterMapMarkers.select(candidates, reserved, route, width / scale, height / scale).forEach {
-            val art = posterMarkerArtwork(it.order.toString(), null, 0xFF303735.toInt(), scale)
-            canvas.drawBitmap(art.bitmap, left + it.x * scale - art.anchorU * art.bitmap.width,
-                top + it.y * scale - art.anchorV * art.bitmap.height, null)
-            art.bitmap.recycle()
-        }
+        checkinIcon: Bitmap,
+        outline: PosterMapOutline? = null,
+    ): PosterWireframeRenderer.AnnotationReport {
+        if (width <= 0f || height <= 0f || model.paths.isEmpty()) return PosterWireframeRenderer.AnnotationReport()
+        val padding = (width * .14f).coerceAtMost(minOf(width, height) * .40f)
+        val transform = if (style.showMapOutline && outline != null) outline.photoTransform(model, width, height, padding)
+            else model.fit(width.toDouble(), height.toDouble(), padding.toDouble())
+        if (style.showMapOutline) outline?.draw(canvas, model, transform, left, top, width, height,
+            style.outlineTheme == PosterInfoTextTheme.LIGHT, attribution = false)
+        val scale = width / PosterRouteLayerRenderer.REFERENCE_WIDTH
+        val logicalWidth = PosterRouteLayerRenderer.REFERENCE_WIDTH
+        val logicalHeight = height / scale
+        val logicalTransform = if (style.showMapOutline && outline != null)
+            outline.photoTransform(model, logicalWidth, logicalHeight, padding / scale)
+        else model.fit(logicalWidth.toDouble(), logicalHeight.toDouble(), (padding / scale).toDouble())
+        val saved = canvas.save()
+        canvas.translate(left, top)
+        canvas.scale(scale, scale)
+        canvas.clipRect(0f, 0f, logicalWidth, logicalHeight)
+        val light = style.outlineTheme == PosterInfoTextTheme.LIGHT
+        val report = PosterRouteLayerRenderer.draw(canvas, model, logicalTransform, logicalWidth, logicalHeight,
+            PosterRouteStyleState(style.theme, style.showCheckins, style.showEndpointNames,
+                style.preferredCheckins, style.selectedCheckinIds), style.endpointNames, checkinIcon,
+            if (light) Color.WHITE else PosterRouteLayerRenderer.INK,
+            if (light) Color.argb(220, 20, 28, 32) else Color.WHITE,
+            routeUnderlayColor = Color.argb(230, 255, 255, 255))
+        canvas.restoreToCount(saved)
+        return report
     }
 
     /** 照片模式合成：裁剪照片铺满画布 → 透明路线 → 信息模块 → 品牌水印（plan §11.1）。 */
@@ -309,8 +286,10 @@ object PosterRenderer {
         snapshot: PosterTrackSnapshot,
         routeModel: PosterRouteModel,
         photo: Bitmap,
+        checkinIcon: Bitmap,
         logo: android.graphics.drawable.Drawable? = null,
         endpointNames: PosterEndpointNames = PosterEndpointNames(),
+        outline: PosterMapOutline? = null,
     ): Bitmap {
         val widthPx = spec.widthPx.toFloat()
         val heightPx = spec.heightPx.toFloat()
@@ -327,11 +306,12 @@ object PosterRenderer {
             val box = PosterLayout.moduleRect(route.placement, routeModuleAspect(routeModel))
             drawRouteModule(canvas, routeModel, box.left * widthPx, box.top * heightPx,
                 box.width * widthPx, box.height * heightPx,
-                RouteStyle(route.theme, route.showCheckinMarkers, route.showEndpointNames, endpointNames))
+                RouteStyle(route.theme, route.showCheckinMarkers, route.showEndpointNames, endpointNames,
+                    route.preferredCheckins, route.showMapOutline,
+                    document.photoInfoState?.textTheme ?: PosterInfoTextTheme.LIGHT, route.selectedCheckinIds), checkinIcon, outline)
         }
         drawInfoModule(canvas, document.photoInfoState, snapshot, widthPx, heightPx)
-        drawBrandCorner(canvas, logo,
-            document.photoInfoState?.textTheme ?: PosterInfoTextTheme.LIGHT, widthPx, heightPx)
+        drawBrandCorner(canvas, logo, photoBrandTheme(photo, photoState.crop, widthPx, heightPx), widthPx, heightPx)
         return output
     }
 
@@ -363,6 +343,15 @@ object PosterRenderer {
         drawMapSummary(canvas, snapshot.stats, infoState, infoRegion.left * widthPx,
             infoRegion.top * heightPx, infoRegion.width * widthPx, infoRegion.height * heightPx, logo)
         return output
+    }
+
+    fun renderWireframePoster(spec: PosterCanvasSpec, document: PosterDocument,
+                             snapshot: PosterTrackSnapshot, model: PosterRouteModel,
+                             names: PosterEndpointNames, outline: PosterMapOutline, checkinIcon: Bitmap): Bitmap {
+        val bitmap = Bitmap.createBitmap(spec.widthPx, spec.heightPx, Bitmap.Config.ARGB_8888)
+        PosterWireframeRenderer.draw(Canvas(bitmap), spec.widthPx.toFloat(), spec.heightPx.toFloat(),
+            document, snapshot, model, names, outline, checkinIcon)
+        return bitmap
     }
 
     fun drawMapSummary(
@@ -427,10 +416,33 @@ object PosterRenderer {
         canvas.restore()
     }
 
-    /**
-     * 品牌水印（用户要求）：固定画布左上角 = 圆形裁剪的 App logo + 「旅行牛牛」；
-     * 颜色随信息主题（白字/黑字），预览与导出共用。
-     */
+    private fun relativeLuminance(color: Int): Double {
+        fun linear(channel: Int): Double {
+            val value = channel / 255.0
+            return if (value <= .04045) value / 12.92 else ((value + .055) / 1.055).pow(2.4)
+        }
+        return .2126 * linear(Color.red(color)) + .7152 * linear(Color.green(color)) + .0722 * linear(Color.blue(color))
+    }
+
+    /** Sample the photo underneath the brand text, using the same crop as preview/export. */
+    internal fun photoBrandTheme(photo: Bitmap, crop: PhotoCrop, width: Float, height: Float): PosterInfoTextTheme {
+        val draw = PosterCrop.draw(crop, photo.width.toFloat(), photo.height.toFloat(), width, height)
+        val base = minOf(width, height)
+        val textStart = base * (.038f + .052f + .014f)
+        val textWidth = TextPaint().apply { textSize = base * .028f; isFakeBoldText = true }.measureText(BRAND)
+        var luminance = 0.0
+        for (row in 0 until 8) for (column in 0 until 24) {
+            val x = textStart + textWidth * (column + .5f) / 24f
+            val y = base * (.038f + .052f / 2f - .028f * .7f + .028f * (row + .5f) / 8f)
+            val sourceX = ((x - draw.transX) / draw.scale).toInt().coerceIn(0, photo.width - 1)
+            val sourceY = ((y - draw.transY) / draw.scale).toInt().coerceIn(0, photo.height - 1)
+            luminance += relativeLuminance(photo.getPixel(sourceX, sourceY))
+        }
+        val average = luminance / (8 * 24)
+        return if ((average + .05) / .05 >= 1.05 / (average + .05)) PosterInfoTextTheme.DARK else PosterInfoTextTheme.LIGHT
+    }
+
+    /** Fixed top-left brand, with a contrasting outline for detailed photo backgrounds. */
     fun drawBrandCorner(
         canvas: Canvas,
         logo: android.graphics.drawable.Drawable?,
@@ -461,7 +473,7 @@ object PosterRenderer {
             canvas.drawCircle(margin + logoSize / 2f, margin + logoSize / 2f, logoSize / 2f, ring)
         }
         val paint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = if (theme == PosterInfoTextTheme.LIGHT) Color.argb(240, 255, 255, 255) else Color.rgb(24, 44, 32)
+            color = if (theme == PosterInfoTextTheme.LIGHT) Color.WHITE else Color.BLACK
             this.textSize = textSize
             textAlign = Paint.Align.LEFT
             isFakeBoldText = true
@@ -485,7 +497,9 @@ object PosterRenderer {
         canvasHeightPx: Float,
     ) {
         state ?: return
-        val layout = InfoLayout.measure(snapshot.stats, InfoStyle(state.textTheme), state.placement.width * canvasWidthPx)
+        val layout = InfoLayout.measure(snapshot.stats,
+            infoStyle(state),
+            state.placement.width * canvasWidthPx)
         layout.draw(canvas,
             state.placement.centerX * canvasWidthPx - state.placement.width * canvasWidthPx / 2f,
             state.placement.centerY * canvasHeightPx - layout.heightPx / 2f)

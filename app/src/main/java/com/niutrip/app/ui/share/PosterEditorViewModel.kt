@@ -9,6 +9,7 @@ import com.niutrip.app.core.toApiTime
 import com.niutrip.app.core.toBeijingDateTime
 import com.niutrip.app.data.local.PendingPointEntity
 import com.niutrip.app.data.remote.PointDto
+import com.niutrip.app.data.remote.ShareAnnotationPatch
 import com.niutrip.app.data.repo.SyncRepository
 import com.niutrip.app.data.repo.TrackRepository
 import java.io.File
@@ -76,6 +77,11 @@ data class PosterEditorState(
     val snapGuides: PosterLayout.SnapGuides? = null,
     val endpointNames: PosterEndpointNames = PosterEndpointNames(),
     val endpointLookupInProgress: Boolean = false,
+    val annotationReport: PosterWireframeRenderer.AnnotationReport = PosterWireframeRenderer.AnnotationReport(),
+    val annotationSaving: Boolean = false,
+    val annotationSaveError: String? = null,
+    val photoOutline: PosterOutlineResult? = null,
+    val outlineLoading: Boolean = false,
 )
 
 /**
@@ -89,6 +95,10 @@ class PosterEditorViewModel(
     private val appContext: Context,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val resolvePlace: suspend (com.niutrip.app.core.PointLite) -> String? = { null },
+    private val annotations: com.niutrip.app.data.ShareAnnotationStore = com.niutrip.app.data.ShareAnnotationStore(appContext),
+    private val boundaryLoader: suspend (List<com.niutrip.app.core.PointLite>) -> PosterOutlineResult = {
+        PosterBoundaryRepository(appContext).forPoints(it)
+    },
 ) : ViewModel() {
 
     private val sessionId = "poster_${UUID.randomUUID()}"
@@ -123,7 +133,15 @@ class PosterEditorViewModel(
                 val track = repository.detail(trackId)
                 require(track.track_status == "FINISHED") { "仅已结束轨迹支持图片分享" }
                 // 只使用同步清理后的本地点集合（plan §4.1），不复活已删 pending。
-                val cloud = repository.points(trackId)
+                var cloud = repository.points(trackId)
+                annotations.legacySelection(trackId)?.let { legacy ->
+                    val updates = cloud.filter { it.point_source == "MANUAL" && it.point_id in legacy && !it.share_annotation }
+                        .map { ShareAnnotationPatch(it.point_id, true) }
+                    val migrated = repository.updateShareAnnotations(trackId, updates).associateBy { it.point_id }
+                    cloud = cloud.map { migrated[it.point_id] ?: it }
+                    syncRepository.migrateLocalShareAnnotations(trackId, legacy)
+                    annotations.clearLegacy(trackId)
+                }
                 val local = syncRepository.localPoints(trackId).map { it.toPosterPointDto() }
                 val snapshot = PosterSnapshotBuilder.build(
                     track, cloud, local, dataRevision = 1)
@@ -134,6 +152,8 @@ class PosterEditorViewModel(
                 val routeModel = fullModel.simplified(epsilon)
                 val safe = PosterLayout.safeArea(reservedBottom = _state.value.mapReservedBottom)
                 val infoAspect = measureInfoAspectDefaults(PosterInfoTextTheme.DARK)
+                val endpointIds = setOf(snapshot.points.first().id, snapshot.points.last().id)
+                val selected = snapshot.points.filter { it.isCheckin && it.shareAnnotation && it.id !in endpointIds }.map { it.id }.toSet()
                 _state.update {
                     it.copy(
                         phase = PosterDataPhase.Ready,
@@ -141,6 +161,7 @@ class PosterEditorViewModel(
                         endpointLookupInProgress = true,
                         routeModel = routeModel,
                         document = it.document.copy(
+                            mapRouteStyle = it.document.mapRouteStyle.copy(selectedCheckinIds = selected),
                             mapInfoState = PosterInfoModuleState(
                                 PosterLayout.defaultMapPlacement(infoAspect, safe),
                                 PosterInfoTextTheme.DARK)))
@@ -181,18 +202,23 @@ class PosterEditorViewModel(
                 val imported = withContext(ioDispatcher) { PosterPhotoLoader.import(appContext, uri, sessionId) }
                 val preview = withContext(ioDispatcher) { imported.decode(maxDimension = PREVIEW_MAX_DIMENSION) }
                     ?: error("无法读取图片")
-                val snapshot = _state.value.snapshot ?: error("轨迹数据未就绪")
+                requireNotNull(_state.value.snapshot) { "轨迹数据未就绪" }
                 val routeAspect = PosterRenderer.routeModuleAspect(
                     _state.value.routeModel ?: error("轨迹数据未就绪"))
                 val resource = imported.copy(id = "${sessionId}_photo_${photoCounter++}")
                 rememberPhoto(resource, preview)
                 val documentBefore = _state.value.document
                 // 更换照片默认保留模块位置，重新初始化裁剪（plan §3.2）。
-                val safe = PosterLayout.safeArea()
+                val safe = _state.value.safeAreaFor(PosterBackgroundMode.PHOTO)
                 val routeState = documentBefore.photoRouteState ?: PosterRouteModuleState(
-                    PosterLayout.clampPlacement(ModulePlacement(0.5f, 0.72f, 0.7f), routeAspect, safe))
+                    PosterLayout.clampPlacement(ModulePlacement(0.5f, 0.72f, 0.7f), routeAspect, safe),
+                    theme = documentBefore.mapRouteStyle.theme,
+                    showCheckinMarkers = documentBefore.mapRouteStyle.showCheckinMarkers,
+                    showEndpointNames = documentBefore.mapRouteStyle.showEndpointNames,
+                    preferredCheckins = documentBefore.mapRouteStyle.preferredCheckins,
+                    selectedCheckinIds = documentBefore.mapRouteStyle.selectedCheckinIds)
                 val infoState = documentBefore.photoInfoState ?: PosterInfoModuleState(
-                    PosterLayout.clampPlacement(ModulePlacement(0.5f, 0.2f, 0.8f),
+                    PosterLayout.clampPlacement(ModulePlacement(0.5f, 0.3f, 0.88f),
                         measureInfoAspectDefaults(PosterInfoTextTheme.LIGHT), safe),
                     PosterInfoTextTheme.LIGHT)
                 recordHistory(documentBefore)
@@ -210,6 +236,7 @@ class PosterEditorViewModel(
                             photoInfoState = infoState,
                             editRevision = it.document.editRevision + 1))
                 }
+                loadPhotoOutline()
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
@@ -222,22 +249,49 @@ class PosterEditorViewModel(
         if (it.photoPhase is PosterPhotoPhase.Error) it.copy(photoPhase = PosterPhotoPhase.Idle) else it
     }
 
+    fun loadPhotoOutline() {
+        val current = _state.value
+        if (current.outlineLoading) return
+        val points = current.snapshot?.points ?: return
+        _state.update { it.copy(outlineLoading = true) }
+        viewModelScope.launch {
+            try {
+                val result = withContext(ioDispatcher) { boundaryLoader(points) }
+                if (_state.value.document.backgroundMode == PosterBackgroundMode.PHOTO) cancelExport()
+                _state.update { it.copy(photoOutline = result, outlineLoading = false,
+                    export = if (it.document.backgroundMode == PosterBackgroundMode.PHOTO) PosterExport.Idle else it.export) }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                if (_state.value.document.backgroundMode == PosterBackgroundMode.PHOTO) cancelExport()
+                _state.update { it.copy(outlineLoading = false,
+                    export = if (it.document.backgroundMode == PosterBackgroundMode.PHOTO) PosterExport.Idle else it.export,
+                    photoOutline = PosterOutlineResult(PosterMapOutline.load(appContext), warning = "细级轮廓暂不可用，已使用省界")) }
+            }
+        }
+    }
+
     // ---------- 撤销 / 重做（plan §3.5 / 阶段 4） ----------
 
     fun undo() {
         if (locked()) return
-        val before = undoStack.removeLastOrNull() ?: return
+        val before = undoStack.lastOrNull() ?: return
         val current = _state.value.document
-        redoStack.addLast(current)
-        applyRestoredDocument(before)
+        syncAnnotationSelection(before.mapRouteStyle.selectedCheckinIds.orEmpty()) {
+            undoStack.removeLast()
+            redoStack.addLast(current)
+            applyRestoredDocument(before)
+        }
     }
 
     fun redo() {
         if (locked()) return
-        val after = redoStack.removeLastOrNull() ?: return
+        val after = redoStack.lastOrNull() ?: return
         val current = _state.value.document
-        undoStack.addLast(current)
-        applyRestoredDocument(after)
+        syncAnnotationSelection(after.mapRouteStyle.selectedCheckinIds.orEmpty()) {
+            redoStack.removeLast()
+            undoStack.addLast(current)
+            applyRestoredDocument(after)
+        }
     }
 
     /** 恢复文档内容，但 editRevision 仍递增，不回退成历史版本号（plan §5.4）。 */
@@ -298,7 +352,7 @@ class PosterEditorViewModel(
         }
     }
 
-    /** 原图比例只允许照片模式；切换后按新比例重新钳制模块（plan §6.3）。 */
+    /** 原图比例只允许照片模式；切换时保留照片模块的自由摆放位置。 */
     fun setRatio(kind: PosterRatioKind) {
         if (locked()) return
         val document = _state.value.document
@@ -336,8 +390,8 @@ class PosterEditorViewModel(
         snapThresholdX: Float = 0f,
         snapThresholdY: Float = 0f,
     ) {
-        if (locked()) return
-        // 地图模式信息位置由画布分区派生（信息在地图上方），不接受自由拖动（用户要求）。
+        if (locked() || !centerX.isFinite() || !centerY.isFinite()) return
+        // Map content stays geographically bound; photo modules may leave the canvas.
         if (_state.value.document.backgroundMode == PosterBackgroundMode.MAP) return
         hasPendingGesture = true
         captureGestureStart()
@@ -369,7 +423,7 @@ class PosterEditorViewModel(
 
     /** 等比缩放：只改归一化宽度，高度由固有比例推导。 */
     fun scaleModule(module: PosterModule, width: Float) {
-        if (locked()) return
+        if (locked() || !width.isFinite()) return
         hasPendingGesture = true
         captureGestureStart()
         _state.update { current ->
@@ -387,18 +441,7 @@ class PosterEditorViewModel(
         if (locked()) return
         _state.update { current ->
             val document = current.document
-            val safe = current.safeAreaFor(document.backgroundMode)
-            val routeAspect = current.routeModel?.let(PosterRenderer::routeModuleAspect)
             var updated = document
-            document.photoRouteState?.let { state ->
-                updated = updated.copy(photoRouteState = state.copy(
-                    placement = PosterLayout.clampPlacement(state.placement, routeAspect ?: 1f, safe)))
-            }
-            document.photoInfoState?.let { state ->
-                updated = updated.copy(photoInfoState = state.copy(
-                    placement = PosterLayout.clampPlacement(state.placement, measureInfoAspect(state), safe)))
-            }
-            // 地图模式信息位置由 mapModeRegions 派生，不需要位置钳制。
             document.photoState?.let { photo ->
                 updated = updated.copy(photoState = photo.copy(
                     crop = PosterCrop.clamp(photo.crop, photo.imageWidth.toFloat(), photo.imageHeight.toFloat(),
@@ -459,6 +502,22 @@ class PosterEditorViewModel(
         _state.update { it.copy(interaction = PosterInteraction.MAP_COMPOSE, selected = null) }
     }
 
+    fun transformOutline(panX: Float, panY: Float, zoom: Float, focusX: Float = .5f, focusY: Float = .5f) {
+        if (locked() || _state.value.interaction != PosterInteraction.MAP_COMPOSE ||
+            !listOf(panX, panY, zoom, focusX, focusY).all { it.isFinite() } || zoom <= 0) return
+        captureGestureStart()
+        hasPendingGesture = true
+        _state.update { current ->
+            val old = current.document.mapState
+            val nextZoom = (old.outlineZoom * zoom).coerceIn(.65f, 4f)
+            val factor = nextZoom / old.outlineZoom
+            val next = old.copy(isAutoFit = false, outlineZoom = nextZoom,
+                outlinePanX = ((old.outlinePanX - focusX + .5f) * factor + focusX - .5f + panX).coerceIn(-1.5f, 1.5f),
+                outlinePanY = ((old.outlinePanY - focusY + .5f) * factor + focusY - .5f + panY).coerceIn(-1.5f, 1.5f))
+            current.copy(document = current.document.copy(mapState = next), export = PosterExport.Idle)
+        }
+    }
+
     fun saveMapCamera(lat: Double, lon: Double, zoom: Double) {
         if (locked()) return
         val document = _state.value.document
@@ -474,6 +533,7 @@ class PosterEditorViewModel(
 
     fun requestMapFit() {
         if (locked()) return
+        commitInteraction()
         val document = _state.value.document
         if (document.mapState.isAutoFit) return
         recordHistory(document)
@@ -499,6 +559,10 @@ class PosterEditorViewModel(
 
     fun registerMapCapture(capture: (suspend (PosterCanvasSpec) -> Bitmap?)?) {
         mapCapture = capture
+    }
+
+    fun updateAnnotationReport(report: PosterWireframeRenderer.AnnotationReport) {
+        _state.update { it.copy(annotationReport = report) }
     }
 
     // ---------- 样式开关 / 预设 / 恢复默认（阶段 4） ----------
@@ -535,6 +599,87 @@ class PosterEditorViewModel(
         }
     }
 
+    fun setMapOutline(visible: Boolean) {
+        mutateStyle { document -> document.copy(photoRouteState = document.photoRouteState?.copy(showMapOutline = visible)) }
+    }
+
+    fun setInfoFontScale(value: Float, group: PosterTextGroup? = null) {
+        if (locked() || !value.isFinite()) return
+        val current = _state.value
+        val info = current.document.photoInfoState ?: return
+        if (current.document.backgroundMode != PosterBackgroundMode.PHOTO) return
+        captureGestureStart()
+        hasPendingGesture = true
+        val scale = value.coerceIn(.8f, 1.6f)
+        val document = current.document.copy(photoInfoState = info.copy(
+            fontScale = if (group == PosterTextGroup.HEADER) info.fontScale else scale,
+            titleFontScale = if (group == PosterTextGroup.STATS) info.titleFontScale else scale))
+        _state.update { it.copy(document = withClampedInfo(document, current.safeAreaFor(PosterBackgroundMode.PHOTO)),
+            export = PosterExport.Idle) }
+    }
+
+    fun setInfoTextColor(group: PosterTextGroup, color: PosterTextColor) {
+        mutateStyle { document ->
+            if (document.backgroundMode != PosterBackgroundMode.PHOTO) return@mutateStyle null
+            val info = document.photoInfoState ?: return@mutateStyle null
+            document.copy(photoInfoState = when (group) {
+                PosterTextGroup.HEADER -> info.copy(titleColor = color)
+                PosterTextGroup.STATS -> info.copy(statsColor = color)
+            })
+        }
+    }
+
+    fun setPreferredCheckins(names: Map<String, String>) {
+        val points = _state.value.snapshot?.points?.filter { it.isCheckin }?.associateBy { it.id } ?: return
+        val validated = names.entries.filter { it.key in points }.take(16).associate { (id, name) ->
+            id to name.trim().take(40).ifBlank { PosterMapMarkers.checkinName(points.getValue(id)) }
+        }
+        mutateStyle { document -> document.copy(
+            mapRouteStyle = document.mapRouteStyle.copy(preferredCheckins = validated),
+            photoRouteState = document.photoRouteState?.copy(preferredCheckins = validated)) }
+    }
+
+    fun setSelectedCheckins(names: Map<String, String>, onSaved: () -> Unit = {}) {
+        if (locked()) return
+        val points = _state.value.snapshot?.points.orEmpty()
+        val endpoints = setOf(points.firstOrNull()?.id, points.lastOrNull()?.id)
+        val valid = points.filter { it.isCheckin && it.id !in endpoints }.associateBy { it.id }
+        val chosen = names.filterKeys { it in valid }.mapValues { (id, name) ->
+            name.trim().take(40).ifBlank { PosterMapMarkers.checkinName(valid.getValue(id)) }
+        }
+        syncAnnotationSelection(chosen.keys) {
+            mutateStyle { document -> document.copy(
+                mapRouteStyle = document.mapRouteStyle.copy(selectedCheckinIds = chosen.keys, preferredCheckins = chosen),
+                photoRouteState = document.photoRouteState?.copy(selectedCheckinIds = chosen.keys, preferredCheckins = chosen)) }
+            onSaved()
+        }
+    }
+
+    fun dismissAnnotationError() = _state.update { it.copy(annotationSaveError = null) }
+
+    private fun syncAnnotationSelection(selected: Set<String>, onSaved: () -> Unit) {
+        if (locked()) return
+        val snapshot = _state.value.snapshot ?: return
+        val endpoints = setOf(snapshot.points.firstOrNull()?.id, snapshot.points.lastOrNull()?.id)
+        val updates = snapshot.points.filter { it.isCheckin && it.id !in endpoints && it.shareAnnotation != (it.id in selected) }
+            .map { ShareAnnotationPatch(it.id, it.id in selected) }
+        if (updates.isEmpty()) { onSaved(); return }
+        _state.update { it.copy(annotationSaving = true, annotationSaveError = null) }
+        viewModelScope.launch {
+            try {
+                val saved = repository.updateShareAnnotations(trackId, updates).associateBy { it.point_id }
+                val points = snapshot.points.map { point -> saved[point.id]?.let { point.copy(shareAnnotation = it.share_annotation) } ?: point }
+                _state.update { it.copy(annotationSaving = false,
+                    snapshot = snapshot.copy(points = points, days = com.niutrip.app.core.DayGrouper.group(points))) }
+                onSaved()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _state.update { it.copy(annotationSaveError = error.message ?: "分享标注保存失败，请重试") }
+            } finally { _state.update { it.copy(annotationSaving = false) } }
+        }
+    }
+
     fun setInfoTextTheme(theme: PosterInfoTextTheme) {
         mutateStyle { document ->
             document.currentInfoState()?.let { state ->
@@ -565,10 +710,9 @@ class PosterEditorViewModel(
     fun applyPhotoPreset(kind: PosterPresetKind) {
         mutateStyle { document ->
             if (document.backgroundMode != PosterBackgroundMode.PHOTO) return@mutateStyle null
-            val snapshot = _state.value.snapshot ?: return@mutateStyle null
             val routeAspect = _state.value.routeModel?.let(PosterRenderer::routeModuleAspect) ?: return@mutateStyle null
             val infoState = document.photoInfoState ?: return@mutateStyle null
-            val safe = PosterLayout.safeArea()
+            val safe = _state.value.safeAreaFor(PosterBackgroundMode.PHOTO)
             val (info, route) = PosterLayout.photoPresetPlacements(
                 kind, routeAspect, measureInfoAspect(infoState), safe)
             document.copy(
@@ -583,21 +727,27 @@ class PosterEditorViewModel(
             val routeAspect = _state.value.routeModel?.let(PosterRenderer::routeModuleAspect) ?: return@mutateStyle null
             when (document.backgroundMode) {
                 PosterBackgroundMode.PHOTO -> {
-                    val safe = PosterLayout.safeArea()
-                    val (info, route) = PosterLayout.defaultPhotoPlacements(
-                        routeAspect, measureInfoAspectDefaults(PosterInfoTextTheme.LIGHT), safe)
+                    val safe = _state.value.safeAreaFor(PosterBackgroundMode.PHOTO)
+                    val info = PosterLayout.clampPlacement(
+                        ModulePlacement(0.5f, 0.3f, 0.88f),
+                        measureInfoAspectDefaults(PosterInfoTextTheme.LIGHT), safe)
+                    val route = PosterLayout.clampPlacement(
+                        ModulePlacement(0.5f, 0.72f, 0.7f), routeAspect, safe)
                     document.copy(
                         photoRouteState = document.photoRouteState?.copy(
-                            placement = route, theme = PosterRouteTheme.BY_DAY, showCheckinMarkers = true,
-                            showEndpointNames = true),
+                            placement = route, theme = PosterRouteTheme.SINGLE, showCheckinMarkers = true,
+                            showEndpointNames = true, showMapOutline = true),
                         photoInfoState = (document.photoInfoState ?: return@mutateStyle null).copy(
                             placement = info, textTheme = PosterInfoTextTheme.LIGHT,
-                            showName = true, showDate = true, showAux = true))
+                            showName = true, showDate = true, showAux = true, fontScale = 1f,
+                            titleFontScale = 1f, titleColor = null, statsColor = null))
                 }
                 PosterBackgroundMode.MAP -> {
                     val safe = PosterLayout.safeArea(reservedBottom = _state.value.mapReservedBottom)
                     document.copy(
-                        mapRouteStyle = PosterRouteStyleState(),
+                        mapState = PosterMapState(),
+                        mapRouteStyle = PosterRouteStyleState(preferredCheckins = document.mapRouteStyle.preferredCheckins,
+                            selectedCheckinIds = document.mapRouteStyle.selectedCheckinIds),
                         mapInfoState = (document.mapInfoState ?: return@mutateStyle null).copy(
                             placement = PosterLayout.defaultMapPlacement(
                                 measureInfoAspectDefaults(PosterInfoTextTheme.DARK), safe),
@@ -628,7 +778,8 @@ class PosterEditorViewModel(
     fun export() {
         val current = _state.value
         val snapshot = current.snapshot ?: return
-        if (current.export is PosterExport.Rendering || current.endpointLookupInProgress) return
+        if (locked() || current.endpointLookupInProgress ||
+            (current.document.backgroundMode == PosterBackgroundMode.PHOTO && current.outlineLoading)) return
         exportJob?.cancel()
         val requestId = ++exportRequestId
         val frozen = current.document
@@ -636,37 +787,39 @@ class PosterEditorViewModel(
         val spec = frozen.canvasSpec()
         _state.update { it.copy(export = PosterExport.Rendering(requestId)) }
         exportJob = viewModelScope.launch {
+            var generatedFile: File? = null
+            var keepFile = false
             try {
                 val logo = androidx.core.content.ContextCompat.getDrawable(appContext, com.niutrip.app.R.mipmap.ic_launcher)
-                // 地图截图必须在主线程等待 SDK（plan §10.3）；位图合成与写盘移出主线程。
-                val bitmap = when (frozen.backgroundMode) {
-                    PosterBackgroundMode.PHOTO -> {
-                        val resource = frozen.photoState?.resourceId?.let(photoResources::get)
-                            ?: error("照片尚未就绪")
-                        val maxSide = (maxOf(spec.widthPx, spec.heightPx) *
-                            PosterCrop.MAX_ZOOM.toInt()).coerceAtMost(EXPORT_DECODE_MAX)
-                        withContext(ioDispatcher) {
-                            val decoded = resource.decode(maxDimension = maxSide) ?: error("无法读取图片")
-                            val model = requireNotNull(_state.value.routeModel)
-                            PosterRenderer.renderPhotoPoster(spec, frozen, snapshot, model, decoded, logo, endpointNames)
-                        }
-                    }
-                    PosterBackgroundMode.MAP -> {
-                        val capture = mapCapture ?: error("地图尚未就绪，请稍后重试")
-                        val mapBitmap = capture.invoke(spec) ?: error("地图截图失败，请重试")
-                        withContext(ioDispatcher) {
-                            PosterRenderer.renderMapPoster(spec, frozen, snapshot, mapBitmap, logo)
-                        }
-                    }
-                }
+                val frozenModel = requireNotNull(current.routeModel)
                 val file = withContext(ioDispatcher) {
-                    val directory = File(appContext.cacheDir, "track_shares")
-                        .apply { check(isDirectory || mkdirs()) }
-                    // 已发出的文件保留一天，避免接收应用延迟读取时 URI 失效（plan §11.3）。
-                    directory.listFiles()?.filter {
-                        it.isFile && it.lastModified() < System.currentTimeMillis() - 86_400_000
-                    }?.forEach(File::delete)
-                    PosterRenderer.writePng(bitmap, File.createTempFile("poster_", ".png", directory))
+                    val bitmap = when (frozen.backgroundMode) {
+                        PosterBackgroundMode.PHOTO -> {
+                            val resource = frozen.photoState?.resourceId?.let(photoResources::get)
+                                ?: error("照片尚未就绪")
+                            val maxSide = (maxOf(spec.widthPx, spec.heightPx) *
+                                PosterCrop.MAX_ZOOM.toInt()).coerceAtMost(EXPORT_DECODE_MAX)
+                            val decoded = resource.decode(maxDimension = maxSide) ?: error("无法读取图片")
+                            try {
+                                PosterRenderer.renderPhotoPoster(spec, frozen, snapshot, frozenModel, decoded,
+                                    PosterWireframeRenderer.loadCheckinIcon(appContext), logo, endpointNames,
+                                    current.photoOutline?.outline ?: PosterMapOutline.load(appContext))
+                            } finally { decoded.recycle() }
+                        }
+                        PosterBackgroundMode.MAP -> {
+                            PosterRenderer.renderWireframePoster(spec, frozen, snapshot, frozenModel, endpointNames,
+                                PosterMapOutline.load(appContext), PosterWireframeRenderer.loadCheckinIcon(appContext))
+                        }
+                    }
+                    try {
+                        val directory = File(appContext.cacheDir, "track_shares")
+                            .apply { check(isDirectory || mkdirs()) }
+                        // 已发出的文件保留一天，避免接收应用延迟读取时 URI 失效（plan §11.3）。
+                        directory.listFiles()?.filter {
+                            it.isFile && it.lastModified() < System.currentTimeMillis() - 86_400_000
+                        }?.forEach(File::delete)
+                        PosterRenderer.writePng(bitmap, File.createTempFile("poster_", ".png", directory)).also { generatedFile = it }
+                    } finally { bitmap.recycle() }
                 }
                 if (exportRequestId != requestId) {
                     file.delete() // 旧请求的结果只能释放自己的资源
@@ -678,6 +831,7 @@ class PosterEditorViewModel(
                         hasUnsavedEdits = false)
                     else it
                 }
+                keepFile = true
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
@@ -687,7 +841,7 @@ class PosterEditorViewModel(
                         else it
                     }
                 }
-            }
+            } finally { if (!keepFile) generatedFile?.delete() }
         }
     }
 
@@ -715,7 +869,7 @@ class PosterEditorViewModel(
 
     // ---------- 内部 ----------
 
-    private fun locked() = _state.value.export is PosterExport.Rendering
+    private fun locked() = _state.value.export is PosterExport.Rendering || _state.value.annotationSaving
 
     private fun rememberPhoto(resource: PosterPhotoResource, preview: Bitmap) {
         photoResources[resource.id] = resource
@@ -733,7 +887,7 @@ class PosterEditorViewModel(
 
     private fun PosterEditorState.safeAreaFor(mode: PosterBackgroundMode): NormRect =
         if (mode == PosterBackgroundMode.MAP) PosterLayout.safeArea(reservedBottom = mapReservedBottom)
-        else PosterLayout.safeArea()
+        else PosterLayout.safeArea().copy(top = .12f)
 
     private fun PosterEditorState.aspectOf(module: PosterModule, document: PosterDocument): Float =
         when (module) {
@@ -767,6 +921,7 @@ class PosterEditorViewModel(
     }
 
     private fun withClampedInfo(document: PosterDocument, safe: NormRect): PosterDocument {
+        if (document.backgroundMode == PosterBackgroundMode.PHOTO) return document
         val state = document.currentInfoState() ?: return document
         return document.withInfoState(state.copy(
             placement = PosterLayout.clampPlacement(state.placement, measureInfoAspect(state), safe)))
@@ -777,7 +932,7 @@ class PosterEditorViewModel(
         val stats = _state.value.snapshot?.stats ?: return 0.4f
         return PosterRenderer.InfoLayout.measure(
             stats,
-            PosterRenderer.InfoStyle(state.textTheme, showName = state.showName, showDate = state.showDate, showAux = state.showAux),
+            PosterRenderer.infoStyle(state),
             REFERENCE_MODULE_WIDTH).aspect
     }
 
@@ -788,18 +943,15 @@ class PosterEditorViewModel(
     }
 
     private fun reclampForSpec(document: PosterDocument): PosterDocument {
+        if (document.backgroundMode == PosterBackgroundMode.PHOTO) {
+            val photo = document.photoState ?: return document
+            val spec = document.canvasSpec()
+            return document.copy(photoState = photo.copy(crop = PosterCrop.clamp(photo.crop,
+                photo.imageWidth.toFloat(), photo.imageHeight.toFloat(), spec.widthPx.toFloat(), spec.heightPx.toFloat())))
+        }
         val current = _state.value
         val safe = current.safeAreaFor(document.backgroundMode)
-        val routeAspect = current.routeModel?.let(PosterRenderer::routeModuleAspect) ?: 1f
         var updated = document
-        document.photoRouteState?.let { state ->
-            updated = updated.copy(photoRouteState = state.copy(
-                placement = PosterLayout.clampPlacement(state.placement, routeAspect, safe)))
-        }
-        document.photoInfoState?.let { state ->
-            updated = updated.copy(photoInfoState = state.copy(
-                placement = PosterLayout.clampPlacement(state.placement, measureInfoAspect(state), safe)))
-        }
         document.mapInfoState?.let { state ->
             updated = updated.copy(mapInfoState = state.copy(
                 placement = PosterLayout.clampPlacement(state.placement, measureInfoAspect(state), safe)))
@@ -842,6 +994,7 @@ class PosterEditorViewModel(
         point_img_url = runCatching { Json.decodeFromString<List<String>>(imgs) }.getOrDefault(emptyList()),
         point_time = time.toBeijingDateTime().toApiTime(),
         point_source = source,
+        share_annotation = shareAnnotation,
     )
 
     companion object {

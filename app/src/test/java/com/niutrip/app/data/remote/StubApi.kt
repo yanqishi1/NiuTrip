@@ -29,6 +29,7 @@ open class StubApi : ApiService {
     override suspend fun pointChanges(id: String, cursor: String?): PointChangesDto =
         throw ApiException(404, "Point changes unavailable")
     override suspend fun patchPoint(trackId: String, pointId: String, body: PointPatchIn): PointDto = TODO()
+    override suspend fun patchShareAnnotations(trackId: String, body: ShareAnnotationsIn): ShareAnnotationsOut = TODO()
     override suspend fun deletePoint(trackId: String, pointId: String): Unit = TODO()
     override suspend fun share(id: String, body: ShareIn): ShareOut = TODO()
     override suspend fun revokeShare(id: String): Response<Unit> = TODO()

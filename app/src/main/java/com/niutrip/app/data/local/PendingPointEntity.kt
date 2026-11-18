@@ -17,4 +17,5 @@ data class PendingPointEntity(
     val time: Long,
     val source: String,
     val createdAt: Long,
+    @androidx.room.ColumnInfo(defaultValue = "0") val shareAnnotation: Boolean = false,
 )

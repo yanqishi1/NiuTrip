@@ -325,14 +325,16 @@ import com.niutrip.app.ui.theme.*
                 editable = !readOnly,
                 saving = state.updatingPoint,
                 onDismiss = { selectedPointId = null },
-                onSave = { name, desc, longitude, latitude, existingImages, newImages ->
+                onSave = { name, desc, longitude, latitude, existingImages, newImages, annotate ->
                     viewModel.updatePoint(point.id, point.isCheckin, name, desc, longitude, latitude,
-                        existingImages, newImages) {
+                        existingImages, newImages, shareAnnotation = annotate) {
                         selectedPointId = null
                     }
                 },
                 onDelete = {
-                    viewModel.deletePoint(point.id) { selectedPointId = null }
+                    viewModel.deletePoint(point.id) {
+                        selectedPointId = null
+                    }
                 },
             )
         }

@@ -12,6 +12,7 @@ data class PointLite(
     val name: String? = null,
     val desc: String? = null,
     val images: List<String> = emptyList(),
+    val shareAnnotation: Boolean = false,
 )
 
 data class DayGroup(val date: LocalDate, val points: List<PointLite>)

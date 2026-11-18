@@ -29,6 +29,11 @@ class PosterRouteTransform internal constructor(
     private val offsetY: Double,
 ) {
     fun map(x: Double, y: Double): PosterPointF = PosterPointF(offsetX + x * scaleX, offsetY + y * scaleY)
+
+    fun viewport(zoom: Float, panX: Float, panY: Float, width: Float, height: Float) = PosterRouteTransform(
+        scaleX * zoom, scaleY * zoom,
+        (offsetX - width / 2) * zoom + width / 2 + panX,
+        (offsetY - height / 2) * zoom + height / 2 + panY)
 }
 
 class PosterRouteModel internal constructor(
@@ -56,7 +61,8 @@ class PosterRouteModel internal constructor(
      * 以同一个缩放系数等比适配模块内部区域（扣除 padding 的 innerW/innerH），居中放置；
      * 纵轴方向：投影 y 向上，屏幕 y 向下（北在上）。
      */
-    fun fit(moduleWidth: Double, moduleHeight: Double, padding: Double): PosterRouteTransform {
+    fun fit(moduleWidth: Double, moduleHeight: Double, padding: Double,
+            bounds: PosterProjectedBounds = this.bounds): PosterRouteTransform {
         val innerW = (moduleWidth - padding * 2).coerceAtLeast(0.0)
         val innerH = (moduleHeight - padding * 2).coerceAtLeast(0.0)
         val spanX = protectedSpan(bounds.spanX)

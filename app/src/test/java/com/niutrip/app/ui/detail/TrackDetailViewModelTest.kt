@@ -575,18 +575,20 @@ class TrackDetailViewModelTest {
                 original.copy(longitude = body.longitude, latitude = body.latitude,
                     point_name = body.point_name, point_desc = body.point_desc,
                     point_img_url = body.point_img_url,
+                    share_annotation = body.share_annotation ?: original.share_annotation,
                     point_source = if (body.point_name.isNullOrBlank()) "AUTO" else "MANUAL")
         }
         val vm = vm(points = listOf(original), source = { LocResult.Failure("x") }, api = api)
         vm.load()
         vm.updatePoint("p1", true, " 新标题 ", " 新内容 ", 116.397, 39.908,
-            listOf("/media/new.jpg"), emptyList())
+            listOf("/media/new.jpg"), emptyList(), shareAnnotation = true)
         val updated = vm.state.value.days.single().points.single()
         assertEquals("新标题", updated.name)
         assertEquals("新内容", updated.desc)
         assertEquals(116.397, updated.lon, 1e-9)
         assertEquals(39.908, updated.lat, 1e-9)
         assertEquals(listOf("/media/new.jpg"), updated.images)
+        assertTrue(updated.shareAnnotation)
         assertFalse(vm.state.value.updatingPoint)
     }
 

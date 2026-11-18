@@ -45,6 +45,11 @@ class SyncRepository(private val api: ApiService, private val dao: PendingPointD
 
     suspend fun localPoints(trackId: String): List<PendingPointEntity> = dao.forTrack(trackId)
 
+    suspend fun migrateLocalShareAnnotations(trackId: String, selectedIds: Set<String>) = mutex.withLock {
+        dao.forTrack(trackId).filter { it.source == "MANUAL" && it.pointId in selectedIds && !it.shareAnnotation }
+            .forEach { dao.insert(it.copy(shareAnnotation = true)) }
+    }
+
     /** 分享/结束前仅补传目标轨迹；失败不删除，留给用户重试或导出图片。 */
     suspend fun flushTrack(trackId: String): FlushResult = mutex.withLock {
         var uploaded = 0
@@ -54,7 +59,7 @@ class SyncRepository(private val api: ApiService, private val dao: PendingPointD
             val points = rows.map { row ->
                 PointIn(row.pointId, row.lon, row.lat, row.name, row.desc,
                     runCatching { Json.decodeFromString<List<String>>(row.imgs) }.getOrDefault(emptyList()),
-                    row.time.toBeijingDateTime().toApiTime(), row.source)
+                    row.time.toBeijingDateTime().toApiTime(), row.source, row.shareAnnotation)
             }
             try {
                 apiCall { api.postPoints(trackId, PointsIn(points)) }
@@ -77,6 +82,7 @@ class SyncRepository(private val api: ApiService, private val dao: PendingPointD
         desc: String?,
         images: List<String>,
         source: String,
+        shareAnnotation: Boolean? = null,
     ): Boolean = mutex.withLock {
         val existing = dao.get(pointId) ?: return@withLock false
         dao.insert(existing.copy(
@@ -86,6 +92,7 @@ class SyncRepository(private val api: ApiService, private val dao: PendingPointD
             desc = desc,
             imgs = Json.encodeToString(images),
             source = source,
+            shareAnnotation = if (source == "MANUAL") shareAnnotation ?: existing.shareAnnotation else false,
         ))
         true
     }
@@ -123,7 +130,7 @@ class SyncRepository(private val api: ApiService, private val dao: PendingPointD
             val points = rows.sortedBy { it.time }.map { row ->
                 PointIn(row.pointId, row.lon, row.lat, row.name, row.desc,
                     runCatching { Json.decodeFromString<List<String>>(row.imgs) }.getOrDefault(emptyList()),
-                    row.time.toBeijingDateTime().toApiTime(), row.source)
+                    row.time.toBeijingDateTime().toApiTime(), row.source, row.shareAnnotation)
             }
             try {
                 apiCall { api.postPoints(trackId, PointsIn(points)) }  // apiCall 把 HttpException 转 ApiException，4xx 才能被识别为永久拒绝

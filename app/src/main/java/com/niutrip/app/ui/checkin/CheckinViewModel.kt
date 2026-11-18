@@ -27,6 +27,7 @@ data class CheckinState(
     val name: String = "",
     val desc: String = "",
     val photos: List<Uri> = emptyList(),
+    val shareAnnotation: Boolean = false,
     val result: CheckinResult = CheckinResult.Idle,
 )
 
@@ -40,6 +41,7 @@ class CheckinViewModel(
     init { locate() }
     fun setName(value: String) = _state.update { it.copy(name = value) }
     fun setDesc(value: String) = _state.update { it.copy(desc = value) }
+    fun setShareAnnotation(value: Boolean) = _state.update { it.copy(shareAnnotation = value) }
     fun addPhotos(values: List<Uri>) = _state.update { old -> old.copy(photos = (old.photos + values).distinct().take(9), result = if (old.photos.size + values.size > 9) CheckinResult.Error("最多选择 9 张图片") else old.result) }
     fun removePhoto(uri: Uri) = _state.update { it.copy(photos = it.photos - uri) }
     fun locate() = viewModelScope.launch {
@@ -70,9 +72,10 @@ class CheckinViewModel(
                 }
             }
             val now = System.currentTimeMillis()
-            apiCall { api.postPoints(trackId, PointsIn(listOf(PointIn(businessId(), lon, lat,
+            val pointId = businessId()
+            apiCall { api.postPoints(trackId, PointsIn(listOf(PointIn(pointId, lon, lat,
                 current.name.ifBlank { null }, current.desc.ifBlank { null }, urls,
-                now.toBeijingDateTime().toApiTime(), "MANUAL")))) }
+                now.toBeijingDateTime().toApiTime(), "MANUAL", current.shareAnnotation)))) }
             _state.update { it.copy(result = CheckinResult.Done) }
         } catch (error: Throwable) { _state.update { it.copy(result = CheckinResult.Error(error.message ?: "发布失败")) } }
     }

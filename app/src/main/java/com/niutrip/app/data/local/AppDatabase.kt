@@ -8,7 +8,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 @Database(
     entities = [PendingPointEntity::class, TrackEntity::class, CloudPointEntity::class,
         PointSyncStateEntity::class, RouteLodCacheEntity::class],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -16,6 +16,15 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun trackDao(): TrackDao
     abstract fun cloudPointDao(): CloudPointDao
     abstract fun routeLodCacheDao(): RouteLodCacheDao
+}
+
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE cloud_points ADD COLUMN shareAnnotation INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE pending_points ADD COLUMN shareAnnotation INTEGER NOT NULL DEFAULT 0")
+        // Old clients may have consumed deltas without storing this field; fetch a fresh baseline.
+        db.execSQL("DELETE FROM point_sync_state")
+    }
 }
 
 val MIGRATION_2_3 = object : Migration(2, 3) {
