@@ -1,6 +1,7 @@
 package com.niutrip.app.ui.detail
 
 import android.app.Application
+import androidx.lifecycle.viewModelScope
 import com.niutrip.app.core.GeoBbox
 import com.niutrip.app.core.PointLite
 import com.niutrip.app.data.local.FakePendingPointDao
@@ -37,6 +38,8 @@ import java.io.File
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -60,8 +63,25 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class)
 class TrackDetailViewModelTest {
+    private val viewModelJobs = mutableListOf<Job>()
     @Before fun setUp() = Dispatchers.setMain(UnconfinedTestDispatcher())
-    @After fun tearDown() = Dispatchers.resetMain()
+    @After fun tearDown() {
+        runBlocking {
+            viewModelJobs.forEach { it.cancel() }
+            viewModelJobs.forEach { it.join() }
+        }
+        Dispatchers.resetMain()
+    }
+
+    private fun createViewModel(
+        id: String,
+        repository: TrackRepository,
+        locationSource: LocationSource,
+        syncRepository: SyncRepository,
+        imagePreparer: ImagePreparer,
+        recordSharedView: Boolean = false,
+    ) = TrackDetailViewModel(id, repository, locationSource, syncRepository, imagePreparer, recordSharedView)
+        .also { viewModelJobs += requireNotNull(it.viewModelScope.coroutineContext[Job]) }
 
     private fun trackDto() = TrackDto(track_id = "t1", track_name = "测试轨迹",
         track_record_mode = "AUTO", track_status = "RECORDING", point_count = 0)
@@ -80,6 +100,59 @@ class TrackDetailViewModelTest {
         vm.selectDay(ALL_DAYS_SELECTION)
 
         assertTrue(vm.state.value.fullRouteFocused)
+    }
+
+    @Test fun `timeline contains every checkin newest first regardless of share annotation`() = runTest {
+        val vm = vm(listOf(
+            pointDto("old").copy(point_time = "2026-09-10T10:00:00", share_annotation = true),
+            pointDto("auto").copy(point_source = "AUTO"),
+            pointDto("new").copy(point_time = "2026-09-12T11:30:00", share_annotation = false),
+        ), LocationSource { LocResult.Failure("unused") })
+        vm.load()
+        vm.selectDay(0)
+
+        val timeline = checkinTimeline(vm.state.value.days)
+        assertEquals(listOf("new", "old"), timeline.map { it.point.id })
+        assertEquals(listOf(2, 0), timeline.map { it.dayIndex })
+    }
+
+    @Test fun `timeline focus switches other day to all and repeated taps refocus`() = runTest {
+        val vm = vm(listOf(pointDto("first"),
+            pointDto("second").copy(point_time = "2026-09-12T10:00:00")),
+            LocationSource { LocResult.Failure("unused") })
+        vm.load()
+        vm.selectDay(0)
+
+        vm.focusCheckin("first")
+        assertEquals(0, vm.state.value.selectedDay)
+        assertEquals("first", vm.state.value.focusedCheckinId)
+        assertEquals(1, vm.state.value.checkinFocusRequest)
+
+        vm.focusCheckin("second")
+        assertEquals(ALL_DAYS_SELECTION, vm.state.value.selectedDay)
+        assertFalse(vm.state.value.fullRouteFocused)
+        assertEquals("second", vm.state.value.focusedCheckinId)
+        vm.focusCheckin("second")
+        assertEquals(3, vm.state.value.checkinFocusRequest)
+
+        vm.selectDay(ALL_DAYS_SELECTION)
+        assertNull(vm.state.value.focusedCheckinId)
+        assertTrue(vm.state.value.fullRouteFocused)
+    }
+
+    @Test fun `timeline ignores automatic or missing focus targets`() = runTest {
+        val vm = vm(listOf(pointDto("auto").copy(point_source = "AUTO")),
+            LocationSource { LocResult.Failure("unused") })
+        vm.load()
+        vm.selectDay(0)
+
+        vm.focusCheckin("auto")
+        vm.focusCheckin("missing")
+
+        assertNull(vm.state.value.focusedCheckinId)
+        assertEquals(0, vm.state.value.checkinFocusRequest)
+        assertEquals(0, vm.state.value.selectedDay)
+        assertTrue(checkinTimeline(vm.state.value.days).isEmpty())
     }
 
     @Test fun `cloud point wins when a pending point has the same id`() {
@@ -116,7 +189,7 @@ class TrackDetailViewModelTest {
                 PointChangesDto("cursor-2", false, emptyList())
         }
         val sync = SyncRepository(api, FakePendingPointDao())
-        val vm = TrackDetailViewModel(
+        val vm = createViewModel(
             "t1", TrackRepository(api, trackDao, pointCache),
             LocationSource { LocResult.Failure("unused") }, sync,
             ImagePreparer { error("unused") })
@@ -150,7 +223,7 @@ class TrackDetailViewModelTest {
         }
         // 带云端点缓存：完整基线走 point-changes 增量同步
         val pointCache = FakeCloudPointDao()
-        val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao, pointCache),
+        val vm = createViewModel("t1", TrackRepository(api, FakeDao, pointCache),
             LocationSource { LocResult.Failure("unused") },
             SyncRepository(api, FakePendingPointDao()), ImagePreparer { error("unused") })
         vm.load()
@@ -188,7 +261,7 @@ class TrackDetailViewModelTest {
                 error("offline")   // 增量同步失败
         }
         val sync = SyncRepository(api, FakePendingPointDao())
-        val vm = TrackDetailViewModel(
+        val vm = createViewModel(
             "t1", TrackRepository(api, trackDao, pointCache),
             LocationSource { LocResult.Failure("unused") }, sync,
             ImagePreparer { error("unused") })
@@ -222,7 +295,7 @@ class TrackDetailViewModelTest {
                 PointChangesDto("cursor-2", false, emptyList())
         }
         val sync = SyncRepository(api, FakePendingPointDao())
-        val vm = TrackDetailViewModel(
+        val vm = createViewModel(
             "t1", TrackRepository(api, trackDao, pointCache),
             LocationSource { LocResult.Failure("unused") }, sync,
             ImagePreparer { error("unused") })
@@ -259,7 +332,7 @@ class TrackDetailViewModelTest {
                 PointChangesDto("cursor-2", false, emptyList())
         }
         val sync = SyncRepository(api, FakePendingPointDao())
-        val vm = TrackDetailViewModel(
+        val vm = createViewModel(
             "t1", TrackRepository(api, trackDao, pointCache),
             LocationSource { LocResult.Failure("unused") }, sync,
             ImagePreparer { error("unused") })
@@ -301,7 +374,7 @@ class TrackDetailViewModelTest {
                 PointChangesDto("cursor-2", false, emptyList())
         }
         val sync = SyncRepository(api, FakePendingPointDao())
-        val vm = TrackDetailViewModel(
+        val vm = createViewModel(
             "t1", TrackRepository(api, trackDao, pointCache, FakePendingPointDao(), lod),
             LocationSource { LocResult.Failure("unused") }, sync,
             ImagePreparer { error("unused") })
@@ -331,7 +404,7 @@ class TrackDetailViewModelTest {
         }
         val syncDao = FakePendingPointDao()
         val sync = SyncRepository(api, syncDao)
-        val vm = TrackDetailViewModel(
+        val vm = createViewModel(
             "t1", TrackRepository(api, trackDao, pointCache),
             LocationSource { LocResult.Failure("unused") }, sync,
             ImagePreparer { error("unused") })
@@ -391,7 +464,7 @@ class TrackDetailViewModelTest {
                 return trackDto().copy(track_status = "FINISHED")
             }
         }
-        val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao),
+        val vm = createViewModel("t1", TrackRepository(api, FakeDao),
             LocationSource { LocResult.Failure("unused") }, SyncRepository(api, dao), ImagePreparer { error("unused") })
         vm.changeStatus("FINISHED")
         assertEquals(listOf("upload", "finish"), calls)
@@ -417,7 +490,7 @@ class TrackDetailViewModelTest {
                 track.copy(track_status = "FINISHED")
         }
         val sync = SyncRepository(api, FakePendingPointDao())
-        val vm = TrackDetailViewModel(
+        val vm = createViewModel(
             "t1", TrackRepository(api, trackDao, pointCache, lodCache = lod),
             LocationSource { LocResult.Failure("unused") }, sync,
             ImagePreparer { error("unused") })
@@ -458,7 +531,7 @@ class TrackDetailViewModelTest {
                 error("offline")
         }
         val sync = SyncRepository(api, FakePendingPointDao())
-        val vm = TrackDetailViewModel(
+        val vm = createViewModel(
             "t1", TrackRepository(api, FakeDao, FakeCloudPointDao()),
             LocationSource { LocResult.Failure("unused") }, sync,
             ImagePreparer { error("unused") })
@@ -486,7 +559,7 @@ class TrackDetailViewModelTest {
                 return trackDto().copy(track_status = "FINISHED")
             }
         }
-        val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao),
+        val vm = createViewModel("t1", TrackRepository(api, FakeDao),
             LocationSource { LocResult.Failure("unused") }, SyncRepository(api, dao), ImagePreparer { error("unused") })
         vm.changeStatus("FINISHED")
         assertFalse(finished)
@@ -500,7 +573,7 @@ class TrackDetailViewModelTest {
             override suspend fun track(id: String, recordView: Boolean) = trackDto()
             override suspend fun points(id: String, page: Int) = PointsPage(points.size, null, null, points)
         }
-        return TrackDetailViewModel("t1", TrackRepository(resolved, FakeDao), source,
+        return createViewModel("t1", TrackRepository(resolved, FakeDao), source,
             SyncRepository(resolved, FakePendingPointDao()), ImagePreparer { error("unused") })
     }
 
@@ -527,7 +600,7 @@ class TrackDetailViewModelTest {
             override suspend fun points(id: String, page: Int) =
                 PointsPage(0, null, null, emptyList())
         }
-        val vm = TrackDetailViewModel(
+        val vm = createViewModel(
             "t1",
             TrackRepository(api, FakeDao),
             LocationSource { LocResult.Failure("unused") },
@@ -588,6 +661,7 @@ class TrackDetailViewModelTest {
         assertEquals(116.397, updated.lon, 1e-9)
         assertEquals(39.908, updated.lat, 1e-9)
         assertEquals(listOf("/media/new.jpg"), updated.images)
+        assertEquals(updated, checkinTimeline(vm.state.value.days).single().point)
         assertTrue(updated.shareAnnotation)
         assertFalse(vm.state.value.updatingPoint)
     }
@@ -654,6 +728,7 @@ class TrackDetailViewModelTest {
         vm.updatePoint("p1", true, "", "", 100.0, 30.0, emptyList(), emptyList())
 
         assertFalse(vm.state.value.days.single().points.single().isCheckin)
+        assertTrue(checkinTimeline(vm.state.value.days).isEmpty())
     }
 
     @Test fun `description or image without title is rejected locally`() = runTest {
@@ -679,6 +754,7 @@ class TrackDetailViewModelTest {
 
         assertEquals("p1", deletedId)
         assertEquals(emptyList<PointDto>(), vm.state.value.points)
+        assertTrue(checkinTimeline(vm.state.value.days).isEmpty())
     }
 
     @Test fun `pending point can be edited and deleted without cloud detail call`() = runTest {
@@ -695,7 +771,7 @@ class TrackDetailViewModelTest {
             override suspend fun deletePoint(trackId: String, pointId: String) =
                 error("local point must not be deleted in cloud")
         }
-        val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao),
+        val vm = createViewModel("t1", TrackRepository(api, FakeDao),
             LocationSource { LocResult.Failure("unused") }, SyncRepository(api, dao),
             ImagePreparer { error("unused") })
         vm.load()
@@ -749,7 +825,7 @@ class TrackDetailViewModelTest {
         val sync = SyncRepository(api, FakePendingPointDao(listOf(
             PendingPointEntity(trackId = "t1", pointId = "p2", lon = 100.0, lat = 30.0,
                 time = 1_700_000_001_000, source = "AUTO", createdAt = 0))))
-        val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao), LocationSource { LocResult.Failure("x") },
+        val vm = createViewModel("t1", TrackRepository(api, FakeDao), LocationSource { LocResult.Failure("x") },
             sync, ImagePreparer { error("unused") })
         vm.load()
         assertEquals(setOf("p1", "p2"), vm.state.value.points.map { it.point_id }.toSet())
@@ -761,7 +837,7 @@ class TrackDetailViewModelTest {
     @Test fun `locally recorded point moves current marker before upload`() = runTest {
         val api = object : StubApi() {}
         val sync = SyncRepository(api, FakePendingPointDao())
-        val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao),
+        val vm = createViewModel("t1", TrackRepository(api, FakeDao),
             LocationSource { LocResult.Failure("unused") }, sync, ImagePreparer { error("unused") })
 
         sync.notifyPointRecorded(PendingPointEntity(trackId = "t1", pointId = "local1",
@@ -776,7 +852,7 @@ class TrackDetailViewModelTest {
     @Test fun `locally recorded point from another track is ignored`() = runTest {
         val api = object : StubApi() {}
         val sync = SyncRepository(api, FakePendingPointDao())
-        val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao),
+        val vm = createViewModel("t1", TrackRepository(api, FakeDao),
             LocationSource { LocResult.Failure("unused") }, sync, ImagePreparer { error("unused") })
 
         sync.notifyPointRecorded(PendingPointEntity(trackId = "t2", pointId = "local2",
@@ -793,7 +869,7 @@ class TrackDetailViewModelTest {
             override suspend fun points(id: String, page: Int) = PointsPage(0, null, null, emptyList())
             override suspend fun postPoints(id: String, body: PointsIn): PostPointsOut = error("offline")
         }
-        val vm = TrackDetailViewModel("t1", TrackRepository(api, FakeDao),
+        val vm = createViewModel("t1", TrackRepository(api, FakeDao),
             LocationSource { LocResult.Success(116.397, 39.908, 1_700_000_001_000) },
             SyncRepository(api, dao), ImagePreparer { error("unused") })
 
@@ -827,7 +903,7 @@ class TrackDetailViewModelTest {
             }
         }
         val imageFile = File.createTempFile("track-cover-test", ".jpg").apply { writeBytes(byteArrayOf(1, 2, 3)) }
-        val viewModel = TrackDetailViewModel(
+        val viewModel = createViewModel(
             "t1",
             TrackRepository(api, FakeDao),
             LocationSource { LocResult.Failure("unused") },

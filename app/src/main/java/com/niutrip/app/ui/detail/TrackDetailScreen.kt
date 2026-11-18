@@ -9,23 +9,31 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -40,6 +48,7 @@ import com.niutrip.app.ui.common.RecordingPermissionDialog
 import com.niutrip.app.ui.common.StatusPill
 import com.niutrip.app.ui.common.TrackCover
 import com.niutrip.app.ui.common.createCameraImage
+import com.niutrip.app.ui.common.absoluteMediaUrl
 import com.niutrip.app.ui.common.hasCamera
 import com.niutrip.app.ui.create.AndroidPermissionChecker
 import com.niutrip.app.ui.create.openAppPermissionSettings
@@ -77,6 +86,16 @@ import com.niutrip.app.ui.theme.*
     val recordingPermissions = remember(permissionRefresh) { permissionChecker.status() }
     var showImageSource by remember { mutableStateOf(false) }
     var selectedPointId by remember { mutableStateOf<String?>(null) }
+    var timelineExpanded by rememberSaveable { mutableStateOf(false) }
+    var timelineGallery by remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
+    val timeline = remember(state.days) { checkinTimeline(state.days) }
+    val focusedCheckin = timeline.firstOrNull { it.point.id == state.focusedCheckinId }?.point
+    val configuration = LocalConfiguration.current
+    val density = LocalDensity.current
+    val expandedPanelHeight = configuration.screenHeightDp.dp * .70f
+    var collapsedPanelInsetPx by remember(configuration, density) { mutableIntStateOf(0) }
+    val panelInsetPx = if (timelineExpanded) with(density) { expandedPanelHeight.roundToPx() }
+        else collapsedPanelInsetPx
     var pendingCameraImage by remember { mutableStateOf<CameraImage?>(null) }
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) {
         it?.let(viewModel::updateImage)
@@ -126,6 +145,9 @@ import com.niutrip.app.ui.theme.*
                 current = state.current,
                 currentAvatarUrl = currentUserAvatarUrl,
                 focusCurrentRequest = state.currentFocusRequest,
+                focusedCheckin = focusedCheckin,
+                checkinFocusRequest = state.checkinFocusRequest,
+                bottomInsetPx = panelInsetPx,
                 showFullRoute = state.fullRouteFocused,
                 showRouteEnd = state.track?.track_status == "FINISHED",
                 routeGeometry = state.routeGeometry,
@@ -134,7 +156,8 @@ import com.niutrip.app.ui.theme.*
                 onCameraIdle = viewModel::onCameraIdle,
             )
             TopAppBar(title = { Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(state.track?.track_name.orEmpty(), fontWeight = FontWeight.Bold)
+                Text(state.track?.track_name.orEmpty(), Modifier.weight(1f), fontWeight = FontWeight.Bold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.width(8.dp)); state.track?.let {
                     StatusPill(
                         if (automaticRecording && recordingPaused) "已暂停" else statusText(it.track_status),
@@ -171,46 +194,46 @@ import com.niutrip.app.ui.theme.*
                 else Icon(Icons.Default.MyLocation,
                     if (backgroundRecording) "定位并记录轨迹点" else "跳转到当前位置")
             }
-            Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.White, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)).padding(16.dp)) {
+            Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                .then(if (timelineExpanded) Modifier.height(expandedPanelHeight) else Modifier)
+                .onSizeChanged { if (!timelineExpanded) collapsedPanelInsetPx = it.height }
+                .background(Color.White, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                .padding(horizontal = 16.dp, vertical = 10.dp).navigationBarsPadding()) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     TrackCover(state.track?.track_img_url.orEmpty(), Modifier.size(44.dp), "轨迹代表图")
                     Spacer(Modifier.width(10.dp))
-                    Text(if (readOnly) "只读轨迹" else "行程轨迹", Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                    Column(Modifier.weight(1f)) {
+                        Text(if (readOnly) "只读轨迹" else "行程轨迹", fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.labelMedium)
+                        Text(formatDistance(state.totalDistanceMeters), color = Green700,
+                            style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                     if (state.updatingImage) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp)
+                    IconButton({ timelineExpanded = !timelineExpanded }) {
+                        Icon(if (timelineExpanded) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                            if (timelineExpanded) "收起时间轴" else "展开时间轴")
+                    }
                 }
-                Spacer(Modifier.height(10.dp))
-                Row(
-                    Modifier.fillMaxWidth().background(Color(0xFFF0F8F3), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("总里程", color = Muted, style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.weight(1f))
-                    Text(formatDistance(state.totalDistanceMeters), color = Green700,
-                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                }
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     item { DayChip("全程", state.fullRouteFocused, Green500) {
                         viewModel.selectDay(ALL_DAYS_SELECTION)
                     } }
                     itemsIndexed(state.days) { index, day -> DayChip(day.date.toString().substring(5), state.selectedDay == index, Color(dayColor(index))) { viewModel.selectDay(index) } }
                 }
-                Spacer(Modifier.height(12.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-                    // 统计恒用服务端真值：本地只加载了粗线（抽稀）与局部细点，数点会偏小
-                    Stat("${state.track?.point_count ?: 0}", "轨迹点")
-                    Stat("${state.track?.checkin_count ?: 0}", "打卡")
-                    Stat("${state.days.size}", "天数")
-                }
                 Spacer(Modifier.height(8.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-                    Stat("${state.track?.view_count ?: 0}", "查看次数")
-                    Stat("${state.track?.viewer_count ?: 0}", "查看人数")
+                    // 统计恒用服务端真值：本地只加载了粗线（抽稀）与局部细点，数点会偏小
+                    Stat("${state.track?.point_count ?: 0}", "轨迹点", Modifier.weight(1f))
+                    Stat("${state.track?.checkin_count ?: 0}", "打卡", Modifier.weight(1f))
+                    Stat("${state.days.size}", "天数", Modifier.weight(1f))
+                    Stat("${state.track?.view_count ?: 0}", "查看次数", Modifier.weight(1f))
+                    Stat("${state.track?.viewer_count ?: 0}", "查看人数", Modifier.weight(1f))
                 }
                 val track = state.track
                 if (!readOnly && track != null) {
-                    Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(8.dp))
                     when {
                         track.track_status == "FINISHED" -> {
                             OutlinedButton({ onShare(track.track_id) }, Modifier.fillMaxWidth()) { Text("分享") }
@@ -274,6 +297,33 @@ import com.niutrip.app.ui.theme.*
                                 OutlinedButton({ onCheckin(track.track_id) }, Modifier.weight(1f)) { Text("手动打卡") }
                             }
                             OutlinedButton({ onShare(track.track_id) }, Modifier.weight(1f)) { Text("分享") }
+                        }
+                    }
+                }
+                if (timelineExpanded) {
+                    Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Text("打卡时间轴", fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleSmall)
+                        Spacer(Modifier.width(8.dp))
+                        Text("${timeline.size}", color = Muted, style = MaterialTheme.typography.labelMedium)
+                    }
+                    HorizontalDivider(color = Line)
+                    LazyColumn(Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(bottom = 8.dp)) {
+                        if (timeline.isEmpty()) item {
+                            Box(Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
+                                Text("暂无打卡点", color = Muted, style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                        itemsIndexed(timeline, key = { _, entry -> entry.point.id }) { index, entry ->
+                            CheckinTimelineRow(entry, selected = entry.point.id == state.focusedCheckinId,
+                                first = index == 0,
+                                last = index == timeline.lastIndex,
+                                onClick = {
+                                    timelineExpanded = false
+                                    viewModel.focusCheckin(entry.point.id)
+                                    selectedPointId = entry.point.id
+                                },
+                                onImageClick = { timelineGallery = entry.point.images to it })
                         }
                     }
                 }
@@ -351,6 +401,9 @@ import com.niutrip.app.ui.theme.*
             imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
         },
     )
+    timelineGallery?.let { (images, index) ->
+        FullScreenImageViewer(images.map(::absoluteMediaUrl), index, onDismiss = { timelineGallery = null })
+    }
     if (showRecordingPermissions) RecordingPermissionDialog(
         status = recordingPermissions,
         onFineLocation = { fineLocation.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) },
@@ -385,6 +438,11 @@ import com.niutrip.app.ui.theme.*
 @Composable private fun DayChip(label: String, selected: Boolean, color: Color, onClick: () -> Unit) {
     Text(label, color = if (selected) Color.White else Muted, modifier = Modifier.background(if (selected) color else Color(0xFFF1F3F7), RoundedCornerShape(50)).clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 7.dp), style = MaterialTheme.typography.labelMedium)
 }
-@Composable private fun Stat(value: String, label: String) { Column(horizontalAlignment = Alignment.CenterHorizontally) { Text(value, fontWeight = FontWeight.Bold); Text(label, color = Muted, style = MaterialTheme.typography.bodySmall) } }
+@Composable private fun Stat(value: String, label: String, modifier: Modifier = Modifier) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(label, color = Muted, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+    }
+}
 private fun statusText(status: String) = when (status) { "RECORDING" -> "记录中"; "FINISHED" -> "已结束"; else -> "未开始" }
 private fun statusColor(status: String) = when (status) { "RECORDING" -> Green700; "FINISHED" -> Muted; else -> Warning }

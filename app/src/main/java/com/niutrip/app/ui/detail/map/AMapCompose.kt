@@ -44,6 +44,9 @@ internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
     current: PointLite? = null,  // 地图上的当前位置图标
     currentAvatarUrl: String? = null,
     focusCurrentRequest: Int = 0,
+    focusedCheckin: PointLite? = null,
+    checkinFocusRequest: Int = 0,
+    bottomInsetPx: Int = 0,
     showFullRoute: Boolean = true,
     showEndpoints: Boolean = true,
     showRouteEnd: Boolean = true,
@@ -158,6 +161,10 @@ internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
     AndroidView(factory = { mapView }, modifier = modifier) { view ->
         val map = view.map
         map.uiSettings.isZoomControlsEnabled = false
+        if (focusedCheckin == null && cameraMemory.hadCheckinFocus && view.width > 0 && view.height > 0) {
+            map.setPointToCenter(view.width / 2, view.height / 2)
+        }
+        cameraMemory.hadCheckinFocus = focusedCheckin != null
         // —— 轨迹线双模式（方案 §6.7）——
         // Ready + 当前 generation 渲染模型：本地 LOD 原子切换（先 add 新层后 remove 旧层）
         val readyGeometry = routeGeometry as? RouteGeometryState.Ready
@@ -386,8 +393,28 @@ internal const val MAX_DETAIL_ROUTE_POINTS = 6_000
                 map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(current.lat, current.lon), 16f))
             }
         }
+        val extraFocusedCheckin = focusedCheckin?.takeIf { point ->
+            overlays.pointLookup.values.none { it.id == point.id }
+        }
+        if (overlays.focusedCheckin != extraFocusedCheckin) {
+            overlays.focusedMarker?.remove()
+            overlays.focusedMarker = extraFocusedCheckin?.let { point ->
+                map.addMarker(MarkerOptions().position(LatLng(point.lat, point.lon))
+                    .title(point.name ?: "旅途打卡")
+                    .icon(BitmapDescriptorFactory.fromBitmap(createCompactCheckinMarkerBitmap(context)))
+                    .anchor(.5f, 1f).zIndex(12f))
+            }
+            overlays.focusedCheckin = extraFocusedCheckin
+        }
+        if (focusedCheckin != null && cameraMemory.checkinFocusRequest != checkinFocusRequest && view.width > 0 && view.height > 0) {
+            cameraMemory.checkinFocusRequest = checkinFocusRequest
+            // Keep the selected stop above the bottom panel.
+            map.setPointToCenter(view.width / 2, (view.height - bottomInsetPx).coerceAtLeast(view.height / 4) / 2)
+            map.animateCamera(CameraUpdateFactory.newLatLngZoom(LatLng(focusedCheckin.lat, focusedCheckin.lon), 16f))
+        }
         map.setOnMarkerClickListener { marker ->
-            overlays.pointLookup[marker.id]?.let(onPointClick)
+            if (marker.id == overlays.focusedMarker?.id) focusedCheckin?.let(onPointClick)
+            else overlays.pointLookup[marker.id]?.let(onPointClick)
             true
         }
         overlays.cameraIdle = onCameraIdle
@@ -431,10 +458,14 @@ private class MapCameraMemory(
     var selectedDayIdx: Int? = null,
     var showFullRoute: Boolean? = null,
     var focusRequest: Int = -1,
+    var checkinFocusRequest: Int = -1,
+    var hadCheckinFocus: Boolean = false,
     var hadPoints: Boolean = false,
 )
 
 private class MapOverlays {
+    var focusedCheckin: PointLite? = null
+    var focusedMarker: Marker? = null
     var routeDays: List<DayGroup>? = null
     var routeIndex = -2
     var routeLimit = 0

@@ -296,7 +296,7 @@ private fun CheckinPhotoGallery(images: List<String>, onOpen: (Int) -> Unit) {
 }
 
 @Composable
-private fun FullScreenImageViewer(
+internal fun FullScreenImageViewer(
     images: List<String>,
     initialPage: Int,
     onDismiss: () -> Unit,

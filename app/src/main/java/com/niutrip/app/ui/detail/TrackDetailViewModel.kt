@@ -62,6 +62,8 @@ data class DetailState(
     val liveTail: List<PointLite> = emptyList(),
     val totalDistanceMeters: Double = 0.0,
     val selectedDay: Int = ALL_DAYS_SELECTION,
+    val focusedCheckinId: String? = null,
+    val checkinFocusRequest: Int = 0,
     val fullRouteFocused: Boolean = false,
     val error: String? = null,
     val deleted: Boolean = false,
@@ -498,6 +500,21 @@ class TrackDetailViewModel(
             it.copy(
                 selectedDay = index,
                 fullRouteFocused = index == ALL_DAYS_SELECTION,
+                focusedCheckinId = null,
+            )
+        }
+        refreshRenderModel()
+    }
+
+    fun focusCheckin(pointId: String) {
+        val current = _state.value
+        val entry = checkinTimeline(current.days).firstOrNull { it.point.id == pointId } ?: return
+        _state.update {
+            it.copy(
+                selectedDay = if (it.selectedDay == entry.dayIndex) it.selectedDay else ALL_DAYS_SELECTION,
+                fullRouteFocused = false,
+                focusedCheckinId = pointId,
+                checkinFocusRequest = it.checkinFocusRequest + 1,
             )
         }
         refreshRenderModel()
