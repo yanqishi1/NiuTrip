@@ -32,6 +32,12 @@ import java.time.format.DateTimeFormatter
 
 internal data class CheckinTimelineEntry(val point: PointLite, val dayIndex: Int)
 
+internal data class PointPhotoGroup(val id: String, val title: String, val images: List<String>)
+
+internal fun timelinePhotoGroups(timeline: List<CheckinTimelineEntry>): List<PointPhotoGroup> = timeline
+    .filter { it.point.images.isNotEmpty() }
+    .map { PointPhotoGroup(it.point.id, it.point.name?.trim()?.takeIf(String::isNotEmpty) ?: "旅途打卡", it.point.images) }
+
 internal fun checkinTimeline(days: List<DayGroup>): List<CheckinTimelineEntry> = days
     .flatMapIndexed { index, day -> day.points.filter(PointLite::isCheckin).map { CheckinTimelineEntry(it, index) } }
     .sortedWith(compareByDescending<CheckinTimelineEntry> { it.point.time }.thenBy { it.point.id })

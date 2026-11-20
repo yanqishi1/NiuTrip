@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.VerticalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,6 +43,7 @@ import com.niutrip.app.ui.common.CameraImage
 import com.niutrip.app.ui.common.absoluteMediaUrl
 import com.niutrip.app.ui.common.createCameraImage
 import com.niutrip.app.ui.common.hasCamera
+import com.niutrip.app.ui.common.ZoomablePhoto
 import com.niutrip.app.ui.theme.Green700
 import com.niutrip.app.ui.theme.Line
 import com.niutrip.app.ui.theme.Muted
@@ -301,22 +303,65 @@ internal fun FullScreenImageViewer(
     initialPage: Int,
     onDismiss: () -> Unit,
 ) {
-    val pagerState = rememberPagerState(
-        initialPage = initialPage.coerceIn(0, images.lastIndex),
-        pageCount = images::size,
+    FullScreenImageViewer(listOf(PointPhotoGroup("point", "", images)), "point", initialPage, onDismiss)
+}
+
+@Composable
+internal fun FullScreenImageViewer(
+    groups: List<PointPhotoGroup>,
+    initialGroupId: String,
+    initialPage: Int,
+    onDismiss: () -> Unit,
+) {
+    val photoGroups = remember(groups) { groups.filter { it.images.isNotEmpty() } }
+    if (photoGroups.isEmpty()) return
+    val verticalPager = rememberPagerState(
+        initialPage = photoGroups.indexOfFirst { it.id == initialGroupId }.coerceAtLeast(0),
+        pageCount = photoGroups::size,
     )
+    var zoomedPhoto by remember { mutableStateOf<Pair<String, Int>?>(null) }
+    val photoPages = remember { mutableStateMapOf(initialGroupId to initialPage) }
+    val currentGroup = photoGroups[verticalPager.currentPage]
+    val currentPage = (photoPages[currentGroup.id] ?: 0).coerceIn(0, currentGroup.images.lastIndex)
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
-            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { index ->
-                AsyncImage(
-                    model = images[index],
-                    contentDescription = "大图 ${index + 1}",
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit,
+            VerticalPager(
+                state = verticalPager,
+                key = { photoGroups[it].id },
+                userScrollEnabled = photoGroups.size > 1 && zoomedPhoto == null,
+                modifier = Modifier.fillMaxSize(),
+            ) { groupIndex ->
+                val group = photoGroups[groupIndex]
+                val horizontalPager = rememberPagerState(
+                    initialPage = (photoPages[group.id] ?: 0).coerceIn(0, group.images.lastIndex),
+                    pageCount = group.images::size,
                 )
+                LaunchedEffect(horizontalPager.currentPage) { photoPages[group.id] = horizontalPager.currentPage }
+                HorizontalPager(
+                    state = horizontalPager,
+                    userScrollEnabled = zoomedPhoto == null,
+                    modifier = Modifier.fillMaxSize(),
+                ) { index ->
+                    ZoomablePhoto(
+                        url = absoluteMediaUrl(group.images[index]),
+                        description = "${group.title} 大图 ${index + 1}",
+                        isActive = groupIndex == verticalPager.currentPage && index == horizontalPager.currentPage,
+                        onZoomedChange = { zoomed ->
+                            if (groupIndex == verticalPager.currentPage && index == horizontalPager.currentPage) {
+                                zoomedPhoto = if (zoomed) group.id to index else null
+                            }
+                        },
+                    )
+                }
+            }
+            if (currentGroup.title.isNotEmpty()) {
+                Text(currentGroup.title, color = Color.White, style = MaterialTheme.typography.titleMedium,
+                    maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(start = 20.dp, top = 24.dp, end = 76.dp)
+                        .background(Color.Black.copy(alpha = .55f), RoundedCornerShape(8.dp)).padding(8.dp))
             }
             FilledTonalIconButton(
                 onClick = onDismiss,
@@ -332,7 +377,7 @@ internal fun FullScreenImageViewer(
                 shape = RoundedCornerShape(50),
             ) {
                 Text(
-                    "${pagerState.currentPage + 1} / ${images.size}",
+                    "${currentPage + 1} / ${currentGroup.images.size}",
                     color = Color.White,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
                 )

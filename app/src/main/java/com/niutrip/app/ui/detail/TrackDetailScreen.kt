@@ -48,7 +48,6 @@ import com.niutrip.app.ui.common.RecordingPermissionDialog
 import com.niutrip.app.ui.common.StatusPill
 import com.niutrip.app.ui.common.TrackCover
 import com.niutrip.app.ui.common.createCameraImage
-import com.niutrip.app.ui.common.absoluteMediaUrl
 import com.niutrip.app.ui.common.hasCamera
 import com.niutrip.app.ui.create.AndroidPermissionChecker
 import com.niutrip.app.ui.create.openAppPermissionSettings
@@ -56,6 +55,10 @@ import com.niutrip.app.ui.create.requestBatteryWhitelist
 import com.niutrip.app.ui.detail.map.AMapView
 import com.niutrip.app.ui.detail.map.ALL_DAYS_SELECTION
 import com.niutrip.app.ui.theme.*
+
+private data class TimelinePhotoGallery(
+    val groups: List<PointPhotoGroup>, val pointId: String, val imageIndex: Int,
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable fun TrackDetailScreen(
@@ -87,7 +90,7 @@ import com.niutrip.app.ui.theme.*
     var showImageSource by remember { mutableStateOf(false) }
     var selectedPointId by remember { mutableStateOf<String?>(null) }
     var timelineExpanded by rememberSaveable { mutableStateOf(false) }
-    var timelineGallery by remember { mutableStateOf<Pair<List<String>, Int>?>(null) }
+    var timelineGallery by remember { mutableStateOf<TimelinePhotoGallery?>(null) }
     val timeline = remember(state.days) { checkinTimeline(state.days) }
     val focusedCheckin = timeline.firstOrNull { it.point.id == state.focusedCheckinId }?.point
     val configuration = LocalConfiguration.current
@@ -323,7 +326,9 @@ import com.niutrip.app.ui.theme.*
                                     viewModel.focusCheckin(entry.point.id)
                                     selectedPointId = entry.point.id
                                 },
-                                onImageClick = { timelineGallery = entry.point.images to it })
+                                onImageClick = {
+                                    timelineGallery = TimelinePhotoGallery(timelinePhotoGroups(timeline), entry.point.id, it)
+                                })
                         }
                     }
                 }
@@ -401,8 +406,8 @@ import com.niutrip.app.ui.theme.*
             imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
         },
     )
-    timelineGallery?.let { (images, index) ->
-        FullScreenImageViewer(images.map(::absoluteMediaUrl), index, onDismiss = { timelineGallery = null })
+    timelineGallery?.let { gallery ->
+        FullScreenImageViewer(gallery.groups, gallery.pointId, gallery.imageIndex, onDismiss = { timelineGallery = null })
     }
     if (showRecordingPermissions) RecordingPermissionDialog(
         status = recordingPermissions,
