@@ -6,7 +6,9 @@ import retrofit2.Response
 /** 测试基座：默认全部 TODO，测试里只 override 用到的方法。 */
 open class StubApi : ApiService {
     override suspend fun register(body: RegisterIn): LoginOut = TODO()
-    override suspend fun sendEmailCode(body: EmailCodeIn): EmailCodeOut = TODO()
+    override suspend fun sendEmailCode(body: EmailCodeIn): VerificationCodeOut = TODO()
+    override suspend fun sendSmsCode(body: SmsCodeIn): VerificationCodeOut = TODO()
+    override suspend fun smsLogin(body: SmsLoginIn): LoginOut = TODO()
     override suspend fun login(body: LoginIn): LoginOut = TODO()
     override suspend fun profile(): UserDto = TODO()
     override suspend fun updateProfile(body: ProfileUpdateIn): UserDto = TODO()

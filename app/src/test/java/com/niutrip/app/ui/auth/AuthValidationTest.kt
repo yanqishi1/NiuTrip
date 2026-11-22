@@ -18,6 +18,7 @@ class AuthValidationTest {
         assertEquals(hint, AuthValidation.identifierError("23800138000"))    // 非 1 开头
         assertEquals(hint, AuthValidation.identifierError("12800138000"))    // 第二位非 3-9
         assertEquals(hint, AuthValidation.identifierError("138abc"))
+        assertEquals(hint, AuthValidation.identifierError("138１２３４５６７８"))
     }
 
     @Test fun `valid email passes`() {

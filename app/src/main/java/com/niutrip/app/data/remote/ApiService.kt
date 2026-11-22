@@ -6,7 +6,9 @@ import retrofit2.http.*
 
 interface ApiService {
     @POST("auth/register/") suspend fun register(@Body body: RegisterIn): LoginOut
-    @POST("auth/email-code/") suspend fun sendEmailCode(@Body body: EmailCodeIn): EmailCodeOut
+    @POST("auth/email-code/") suspend fun sendEmailCode(@Body body: EmailCodeIn): VerificationCodeOut
+    @POST("auth/sms-code/") suspend fun sendSmsCode(@Body body: SmsCodeIn): VerificationCodeOut
+    @POST("auth/sms-login/") suspend fun smsLogin(@Body body: SmsLoginIn): LoginOut
     @POST("auth/login/") suspend fun login(@Body body: LoginIn): LoginOut
     @GET("user/profile/") suspend fun profile(): UserDto
     @PUT("user/profile/") suspend fun updateProfile(@Body body: ProfileUpdateIn): UserDto
