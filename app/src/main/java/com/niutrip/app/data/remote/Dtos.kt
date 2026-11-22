@@ -15,9 +15,13 @@ import kotlinx.serialization.Serializable
 @Serializable data class RegisterIn(
     val username: String,
     val password: String,
+    val password_confirm: String,
     val phone: String? = null,
     val email: String? = null,
+    val email_code: String? = null,
 )
+@Serializable data class EmailCodeIn(val email: String)
+@Serializable data class EmailCodeOut(val detail: String, val expires_in: Int, val retry_after: Int)
 @Serializable data class LoginOut(val token: String, val user: UserDto)
 @Serializable data class ProfileUpdateIn(val username: String? = null, val avata_url: String? = null)
 @Serializable data class PasswordIn(val old_password: String, val new_password: String)
